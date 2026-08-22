@@ -35,9 +35,6 @@ import { workspaceCrmService } from "./src/services/workspaceCrmService";
 import { crmEventService } from "./src/services/crmEventService";
 import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
-import { db } from "./src/services/firebase";
-import { collection, getDocs } from "firebase/firestore";
-
 dotenv.config();
 
 // ============================================================
