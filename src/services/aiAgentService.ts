@@ -376,7 +376,11 @@ ${message}
         const routerModel =
           this.getOpenRouterPrimaryModel();
 
-        const result = await openRouter.chat.completions.create({
+        // OpenRouter accepts additional routing fields that are
+        // not currently declared by the OpenAI SDK type contract.
+        // Keep the runtime payload unchanged while isolating the
+        // compatibility boundary to this OpenRouter request.
+        const routerRequestBody: any = {
           model: routerModel,
           messages: [
             {
@@ -391,13 +395,16 @@ ${message}
           ],
           temperature: 0,
 
-          // OpenRouter-specific routing options.
-          // The OpenAI SDK forwards these in the request body.
           extra_body:
             this.getOpenRouterExtraBody(
               routerModel
             ),
-        });
+        };
+
+        const result =
+          await openRouter.chat.completions.create(
+            routerRequestBody
+          );
 
         const routed =
           String(result.choices?.[0]?.message?.content || "")
