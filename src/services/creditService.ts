@@ -1,10 +1,4 @@
-import {
-  doc,
-  getDoc,
-  runTransaction,
-  setDoc,
-} from "firebase/firestore";
-import { db } from "./firebase";
+import { adminDb } from "./firebaseAdmin";
 
 export interface WorkspaceCreditState {
   workspaceId: string;
@@ -23,57 +17,134 @@ const PLAN_LIMITS = {
 function normalizePlanId(
   value: any
 ): "starter" | "business" | "enterprise" {
-  if (value === "enterprise") return "enterprise";
-  if (value === "business") return "business";
+  if (value === "enterprise") {
+    return "enterprise";
+  }
+
+  if (value === "business") {
+    return "business";
+  }
+
   return "starter";
 }
 
+function normalizeWorkspaceId(
+  workspaceId: string
+): string {
+  const clean =
+    String(workspaceId || "").trim();
+
+  if (!clean) {
+    throw new Error(
+      "FOX_WORKSPACE_ID_REQUIRED"
+    );
+  }
+
+  return clean;
+}
+
+function calculateCreditState(
+  workspaceId: string,
+  data: any
+): WorkspaceCreditState {
+  const planId =
+    normalizePlanId(
+      data?.planId
+    );
+
+  const limit =
+    PLAN_LIMITS[planId];
+
+  const used =
+    Math.max(
+      0,
+      Number(
+        data?.aiConversationsUsed || 0
+      )
+    );
+
+  let balance: number;
+
+  if (limit === -1) {
+    balance = -1;
+
+  } else if (
+    typeof data?.creditBalance ===
+    "number"
+  ) {
+    balance =
+      Math.max(
+        0,
+        Number(
+          data.creditBalance
+        )
+      );
+
+  } else {
+    balance =
+      Math.max(
+        0,
+        limit - used
+      );
+  }
+
+  return {
+    workspaceId,
+    planId,
+    aiConversationsUsed:
+      used,
+
+    creditBalance:
+      balance,
+
+    unlimited:
+      limit === -1,
+  };
+}
+
 export const creditService = {
+
+  // =========================================================
+  // READ CURRENT CREDIT STATE
+  // Backend-only / Firebase Admin
+  // =========================================================
+
   async getState(
     workspaceId: string
   ): Promise<WorkspaceCreditState> {
-    const ref = doc(db, "workspaces", workspaceId);
-    const snap = await getDoc(ref);
 
-    if (!snap.exists()) {
+    const cleanWorkspaceId =
+      normalizeWorkspaceId(
+        workspaceId
+      );
+
+    const workspaceRef =
+      adminDb
+        .collection("workspaces")
+        .doc(cleanWorkspaceId);
+
+    const snapshot =
+      await workspaceRef.get();
+
+    if (!snapshot.exists) {
       throw new Error(
-        `Workspace not found: ${workspaceId}`
+        `FOX_WORKSPACE_NOT_FOUND:${cleanWorkspaceId}`
       );
     }
 
-    const data: any = snap.data();
+    const data =
+      snapshot.data() || {};
 
-    const planId = normalizePlanId(data.planId);
-    const limit = PLAN_LIMITS[planId];
-
-    const used =
-      Number(data.aiConversationsUsed || 0);
-
-    /*
-     * creditBalance is the authoritative remaining balance.
-     * For old workspaces where it has not yet been initialized,
-     * derive it once from the plan limit.
-     */
-    let balance: number;
-
-    if (limit === -1) {
-      balance = -1;
-    } else if (
-      typeof data.creditBalance === "number"
-    ) {
-      balance = data.creditBalance;
-    } else {
-      balance = Math.max(0, limit - used);
-    }
-
-    return {
-      workspaceId,
-      planId,
-      aiConversationsUsed: used,
-      creditBalance: balance,
-      unlimited: limit === -1,
-    };
+    return calculateCreditState(
+      cleanWorkspaceId,
+      data
+    );
   },
+
+
+  // =========================================================
+  // AI USAGE GUARD
+  // =========================================================
 
   async canUseAI(
     workspaceId: string
@@ -81,15 +152,31 @@ export const creditService = {
     allowed: boolean;
     state: WorkspaceCreditState;
   }> {
-    const state = await this.getState(workspaceId);
+
+    const state =
+      await this.getState(
+        workspaceId
+      );
 
     return {
       allowed:
         state.unlimited ||
         state.creditBalance > 0,
+
       state,
     };
   },
+
+
+  // =========================================================
+  // ATOMIC CONVERSATION CREDIT CONSUMPTION
+  //
+  // IMPORTANT:
+  // - Firebase Admin only
+  // - Transaction prevents double-spend
+  // - Workspace document is source of truth
+  // - Usage record is written in same transaction
+  // =========================================================
 
   async consumeConversation(
     workspaceId: string,
@@ -99,59 +186,63 @@ export const creditService = {
       agentRole?: string;
     }
   ) {
-    const workspaceRef =
-      doc(db, "workspaces", workspaceId);
 
-    const usageRef =
-      doc(
-        db,
-        "workspaces",
-        workspaceId,
-        "usage",
-        `usage_${Date.now()}_${Math.random()
-          .toString(36)
-          .substring(2, 8)}`
+    const cleanWorkspaceId =
+      normalizeWorkspaceId(
+        workspaceId
       );
 
-    return runTransaction(
-      db,
-      async (transaction) => {
-        const snapshot =
-          await transaction.get(workspaceRef);
+    const workspaceRef =
+      adminDb
+        .collection("workspaces")
+        .doc(cleanWorkspaceId);
 
-        if (!snapshot.exists()) {
+    const usageRef =
+      workspaceRef
+        .collection("usage")
+        .doc(
+          `usage_${Date.now()}_${Math.random()
+            .toString(36)
+            .substring(2, 8)}`
+        );
+
+    return adminDb.runTransaction(
+      async (transaction) => {
+
+        const snapshot =
+          await transaction.get(
+            workspaceRef
+          );
+
+        if (!snapshot.exists) {
           throw new Error(
-            `Workspace not found: ${workspaceId}`
+            `FOX_WORKSPACE_NOT_FOUND:${cleanWorkspaceId}`
           );
         }
 
-        const data: any = snapshot.data();
+        const data =
+          snapshot.data() || {};
+
+        const currentState =
+          calculateCreditState(
+            cleanWorkspaceId,
+            data
+          );
 
         const planId =
-          normalizePlanId(data.planId);
+          currentState.planId;
 
-        const limit = PLAN_LIMITS[planId];
+        const limit =
+          PLAN_LIMITS[planId];
 
         const used =
-          Number(data.aiConversationsUsed || 0);
+          currentState.aiConversationsUsed;
 
-        let balance: number;
-
-        if (limit === -1) {
-          balance = -1;
-        } else if (
-          typeof data.creditBalance === "number"
-        ) {
-          balance = data.creditBalance;
-        } else {
-          balance = Math.max(
-            0,
-            limit - used
-          );
-        }
+        const balance =
+          currentState.creditBalance;
 
         if (
-          limit !== -1 &&
+          !currentState.unlimited &&
           balance <= 0
         ) {
           throw new Error(
@@ -159,51 +250,86 @@ export const creditService = {
           );
         }
 
-        const nextUsed = used + 1;
+        const nextUsed =
+          used + 1;
 
         const nextBalance =
           limit === -1
             ? -1
-            : Math.max(0, balance - 1);
+            : Math.max(
+                0,
+                balance - 1
+              );
+
+        const now =
+          new Date().toISOString();
 
         transaction.update(
           workspaceRef,
           {
-            aiConversationsUsed: nextUsed,
-            creditBalance: nextBalance,
+            aiConversationsUsed:
+              nextUsed,
+
+            creditBalance:
+              nextBalance,
+
             updatedAt:
-              new Date().toISOString(),
+              now,
           }
         );
 
         transaction.set(
           usageRef,
           {
-            workspaceId,
-            type: "ai_conversation",
-            units: 1,
+            workspaceId:
+              cleanWorkspaceId,
+
+            type:
+              "ai_conversation",
+
+            units:
+              1,
+
             planId,
+
             channel:
-              metadata?.channel || "unknown",
+              metadata?.channel ||
+              "unknown",
+
             sessionId:
-              metadata?.sessionId || null,
+              metadata?.sessionId ||
+              null,
+
             agentRole:
-              metadata?.agentRole || null,
-            balanceBefore: balance,
-            balanceAfter: nextBalance,
+              metadata?.agentRole ||
+              null,
+
+            balanceBefore:
+              balance,
+
+            balanceAfter:
+              nextBalance,
+
             createdAt:
-              new Date().toISOString(),
+              now,
           }
         );
 
         return {
-          success: true,
-          workspaceId,
+          success:
+            true,
+
+          workspaceId:
+            cleanWorkspaceId,
+
           planId,
+
           aiConversationsUsed:
             nextUsed,
+
           creditBalance:
             nextBalance,
+
           unlimited:
             limit === -1,
         };
@@ -211,27 +337,45 @@ export const creditService = {
     );
   },
 
+
+  // =========================================================
+  // INITIALIZE LEGACY WORKSPACE CREDIT FIELDS
+  // =========================================================
+
   async initializeCredits(
     workspaceId: string
   ) {
-    const state = await this.getState(
-      workspaceId
-    );
+
+    const cleanWorkspaceId =
+      normalizeWorkspaceId(
+        workspaceId
+      );
+
+    const state =
+      await this.getState(
+        cleanWorkspaceId
+      );
 
     const ref =
-      doc(db, "workspaces", workspaceId);
+      adminDb
+        .collection("workspaces")
+        .doc(cleanWorkspaceId);
 
-    await setDoc(
-      ref,
+    await ref.set(
       {
         creditBalance:
           state.creditBalance,
+
         aiConversationsUsed:
           state.aiConversationsUsed,
+
         updatedAt:
           new Date().toISOString(),
       },
-      { merge: true }
+      {
+        merge:
+          true,
+      }
     );
 
     return state;
