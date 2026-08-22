@@ -739,6 +739,7 @@ ${industryContext || "Standard business inquiry catalog."}
       "fox_modify_invalid_selection",
       "fox_modify_parser",
       "fox_cancel_flow",
+      "fox_booking_abort",
       "fox_crm_lookup",
       "fox_booking_datetime_guard",
       "fox_booking_identity_guard",
@@ -1978,6 +1979,14 @@ ${industryContext || "Standard business inquiry catalog."}
           bookingFlowMessage
         );
 
+      // Negative booking intent must take precedence over the
+      // generic booking detector. Phrases such as "مش عاوز احجز"
+      // contain the word "احجز", but they explicitly abort booking.
+      const bookingFlowEarlyAbortIntent =
+        /^(مش\s*عاوز\s*احجز|مش\s*عايز\s*احجز|مش\s*عاوز\s*أحجز|مش\s*عايز\s*أحجز|خلاص\s*مش\s*عاوز|خلاص\s*مش\s*عايز|بلاش\s*حجز|الغاء|إلغاء|cancel|never\s*mind|stop)$/i.test(
+          bookingFlowMessage.toLowerCase()
+        );
+
       const explicitDate =
         /(\d{1,2})\s+(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)|(\d{4}-\d{2}-\d{2})|بكره|بكرة|غدا|غداً/i.test(
           bookingFlowMessage
@@ -2000,6 +2009,7 @@ ${industryContext || "Standard business inquiry catalog."}
       // -------------------------------------------------------
       if (
         bookingFlowIntent &&
+        !bookingFlowEarlyAbortIntent &&
         (!explicitDate || !explicitTime)
       ) {
         await sharedMemoryService.appendMessage(
@@ -2051,7 +2061,104 @@ ${industryContext || "Standard business inquiry catalog."}
       if (
         lastBookingBot.includes("BOOKING_STATE:WAIT_DATETIME")
       ) {
-        if (!explicitDate || !explicitTime) {
+        // -----------------------------------------------------
+        // BOOKING STATE ESCAPE
+        //
+        // WAIT_DATETIME must never trap unrelated messages.
+        // Explicit appointment-cancellation requests are handled
+        // earlier by the deterministic cancellation flow.
+        // -----------------------------------------------------
+
+        const normalizedBookingFlowMessage =
+          bookingFlowMessage.toLowerCase();
+
+        const bookingFlowAbortIntent =
+          bookingFlowEarlyAbortIntent;
+
+        const bookingFlowTopicSwitch =
+          /(سعر|الأسعار|الاسعار|تكلفة|كام|عرض|عروض|خصم|خصومات|شكوى|شكوي|مشكلة|مشكلتي|الدعم|خدمة العملاء|مش عاجباني|مش عاجبني|support|price|pricing|cost|offer|offers|discount|complaint|customer service)/i.test(
+            normalizedBookingFlowMessage
+          );
+
+        const hasAnyDatetimeSignal =
+          explicitDate || explicitTime;
+
+        if (
+          bookingFlowAbortIntent ||
+          (
+            bookingFlowTopicSwitch &&
+            !hasAnyDatetimeSignal
+          )
+        ) {
+          console.log(
+            `↩️ [FOX Booking] WAIT_DATETIME escaped | Workspace=${workspace.id} | Abort=${bookingFlowAbortIntent} | TopicSwitch=${bookingFlowTopicSwitch}`
+          );
+
+          // Explicitly abort the CURRENT booking flow.
+          // This must be terminal so downstream booking detectors
+          // cannot reinterpret phrases such as "مش عاوز احجز"
+          // as a brand-new booking request.
+          if (bookingFlowAbortIntent) {
+            const abortReply =
+              messageLang === "ar"
+                ? "تمام ✅ تم إلغاء عملية الحجز الحالية. لو احتجت أي حاجة تانية أنا معاك."
+                : "Done ✅ The current booking process has been cancelled. Let me know if you need anything else.";
+
+            await sharedMemoryService.appendMessage(
+              workspace.id,
+              params.sessionId,
+              {
+                sender: "user",
+                text: message,
+                time: new Date().toISOString(),
+                agentRole: "Sales"
+              }
+            );
+
+            await sharedMemoryService.appendMessage(
+              workspace.id,
+              params.sessionId,
+              {
+                sender: "bot",
+                text:
+                  abortReply +
+                  "\nBOOKING_STATE:CANCELLED",
+                time: new Date().toISOString(),
+                agentRole: "Sales"
+              }
+            );
+
+            console.log(
+              `🛑 [FOX Booking] Current booking flow cancelled | Workspace=${workspace.id}`
+            );
+
+            return {
+              response: abortReply,
+              aiResponse: abortReply,
+              detectedLanguage: messageLang,
+              source: "fox_booking_abort",
+              suggestedActions:
+                messageLang === "ar"
+                  ? ["حجز موعد جديد", "الاستفسار عن الأسعار"]
+                  : ["Book New Appointment", "Ask About Pricing"]
+            };
+          }
+
+          // Topic switches such as pricing, offers or support
+          // cancel the pending booking state but continue through
+          // the normal Smart Agent Router for the CURRENT message.
+          await sharedMemoryService.appendMessage(
+            workspace.id,
+            params.sessionId,
+            {
+              sender: "bot",
+              text: "BOOKING_STATE:CANCELLED",
+              time: new Date().toISOString(),
+              agentRole: "Sales"
+            }
+          );
+
+        } else if (!explicitDate || !explicitTime) {
           const reply =
             messageLang === "ar"
               ? "محتاج التاريخ والوقت مع بعض، مثلاً: 25 أغسطس الساعة 3 مساءً."
@@ -2064,9 +2171,8 @@ ${industryContext || "Standard business inquiry catalog."}
             source: "fox_booking_datetime_guard",
             suggestedActions: []
           };
-        }
-
-        const completeBookingRequest =
+        } else {
+          const completeBookingRequest =
           `عاوز أحجز موعد ${bookingFlowMessage}`;
 
         await sharedMemoryService.appendMessage(
@@ -2107,6 +2213,7 @@ ${industryContext || "Standard business inquiry catalog."}
           source: "fox_booking_identity_guard",
           suggestedActions: []
         };
+        }
       }
     }
 
