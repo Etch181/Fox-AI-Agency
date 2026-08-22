@@ -1,14 +1,118 @@
-import { db, sanitizeForFirestore } from "./firebase";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  setDoc,
-  updateDoc,
-  where,
-} from "firebase/firestore";
+import { adminDb } from "./firebaseAdmin";
+
+function sanitizeForFirestore<T>(value: T): T {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeForFirestore(item))
+      .filter((item) => item !== undefined) as T;
+  }
+
+  if (
+    typeof value === "object" &&
+    !(value instanceof Date)
+  ) {
+    const result: Record<string, any> = {};
+
+    for (const [key, item] of Object.entries(value as any)) {
+      if (item !== undefined) {
+        result[key] = sanitizeForFirestore(item);
+      }
+    }
+
+    return result as T;
+  }
+
+  return value;
+}
+
+
+
+const collection = (...segments: string[]) => {
+  let ref: any = adminDb;
+
+  for (let i = 0; i < segments.length; i++) {
+    ref =
+      i % 2 === 0
+        ? ref.collection(segments[i])
+        : ref.doc(segments[i]);
+  }
+
+  return ref;
+};
+
+const doc = (...segments: string[]) => {
+  let ref: any = adminDb;
+
+  for (let i = 0; i < segments.length; i++) {
+    ref =
+      i % 2 === 0
+        ? ref.collection(segments[i])
+        : ref.doc(segments[i]);
+  }
+
+  return ref;
+};
+
+const where = (
+  field: string,
+  operator: FirebaseFirestore.WhereFilterOp,
+  value: any
+) => ({
+  field,
+  operator,
+  value,
+});
+
+const query = (
+  ref: FirebaseFirestore.CollectionReference,
+  ...conditions: Array<{
+    field: string;
+    operator: FirebaseFirestore.WhereFilterOp;
+    value: any;
+  }>
+) => {
+  let q: FirebaseFirestore.Query = ref;
+
+  for (const condition of conditions) {
+    q = q.where(
+      condition.field,
+      condition.operator,
+      condition.value
+    );
+  }
+
+  return q;
+};
+
+const getDoc = async (
+  ref: FirebaseFirestore.DocumentReference
+) => ref.get();
+
+const getDocs = async (
+  ref: FirebaseFirestore.Query
+) => ref.get();
+
+const setDoc = async (
+  ref: FirebaseFirestore.DocumentReference,
+  data: any,
+  options?: { merge?: boolean }
+) => {
+  if (options?.merge) {
+    return ref.set(data, { merge: true });
+  }
+
+  return ref.set(data);
+};
+
+const updateDoc = async (
+  ref: FirebaseFirestore.DocumentReference,
+  data: any
+) => ref.update(data);
+
 
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -108,12 +212,12 @@ export const workspaceDataService = {
 
     // Tenant-isolated collection
     await setDoc(
-      doc(db, "workspaces", workspaceId, "appointments", id),
+      doc( "workspaces", workspaceId, "appointments", id),
       appointment
     );
 
     // Compatibility with current dashboard
-    await setDoc(doc(db, "appointments", id), appointment);
+    await setDoc(doc( "appointments", id), appointment);
 
     return appointment;
   },
@@ -122,7 +226,7 @@ export const workspaceDataService = {
     workspaceId: string
   ) {
     const q = query(
-      collection(db, "clinicServices"),
+      collection( "clinicServices"),
       where("workspaceId", "==", workspaceId)
     );
 
@@ -138,7 +242,7 @@ export const workspaceDataService = {
     workspaceId: string
   ) {
     const q = query(
-      collection(db, "doctors"),
+      collection( "doctors"),
       where("workspaceId", "==", workspaceId)
     );
 
@@ -170,7 +274,6 @@ export const workspaceDataService = {
 
     await updateDoc(
       doc(
-        db,
         "workspaces",
         workspaceId,
         "appointments",
@@ -181,7 +284,7 @@ export const workspaceDataService = {
 
     // Compatibility collection used by the current dashboard.
     await updateDoc(
-      doc(db, "appointments", appointmentId),
+      doc( "appointments", appointmentId),
       payload
     );
 
@@ -203,7 +306,6 @@ export const workspaceDataService = {
     }
 
     const ref = collection(
-      db,
       "workspaces",
       workspaceId,
       "appointments"
@@ -241,7 +343,6 @@ export const workspaceDataService = {
     }
   ) {
     const ref = collection(
-      db,
       "workspaces",
       workspaceId,
       "crmLeads"
@@ -272,7 +373,6 @@ export const workspaceDataService = {
         `${channel}_${externalCustomerId}`;
 
       const canonicalRef = doc(
-        db,
         "workspaces",
         workspaceId,
         "crmLeads",
@@ -282,7 +382,7 @@ export const workspaceDataService = {
       const canonicalSnap =
         await getDoc(canonicalRef);
 
-      if (canonicalSnap.exists()) {
+      if (canonicalSnap.exists) {
         const existingLead: any =
           canonicalSnap.data();
 
@@ -469,7 +569,6 @@ export const workspaceDataService = {
 
     await setDoc(
       doc(
-        db,
         "workspaces",
         workspaceId,
         "crmLeads",
@@ -480,7 +579,7 @@ export const workspaceDataService = {
 
     // Legacy root compatibility.
     await setDoc(
-      doc(db, "crmLeads", id),
+      doc( "crmLeads", id),
       lead
     );
 
@@ -492,7 +591,6 @@ export const workspaceDataService = {
     phone: string
   ) {
     const ref = collection(
-      db,
       "workspaces",
       workspaceId,
       "appointments"
@@ -553,7 +651,6 @@ export const workspaceDataService = {
     // Tenant source of truth
     await updateDoc(
       doc(
-        db,
         "workspaces",
         workspaceId,
         "appointments",
@@ -565,7 +662,7 @@ export const workspaceDataService = {
     // Compatibility with current dashboard root collection
     try {
       await updateDoc(
-        doc(db, "appointments", appointmentId),
+        doc( "appointments", appointmentId),
         payload
       );
     } catch (err) {
@@ -593,14 +690,14 @@ export const workspaceDataService = {
     });
 
     await updateDoc(
-      doc(db, "workspaces", workspaceId, "appointments", appointmentId),
+      doc( "workspaces", workspaceId, "appointments", appointmentId),
       updates
     );
 
     // Keep current dashboard root collection synchronized.
     try {
       await updateDoc(
-        doc(db, "appointments", appointmentId),
+        doc( "appointments", appointmentId),
         updates
       );
     } catch (err) {
@@ -622,7 +719,6 @@ export const workspaceDataService = {
     date: string
   ) {
     const ref = collection(
-      db,
       "workspaces",
       workspaceId,
       "appointments"
@@ -671,7 +767,7 @@ export const workspaceDataService = {
     });
 
     await setDoc(
-      doc(db, "workspaces", workspaceId, "conversations", id),
+      doc( "workspaces", workspaceId, "conversations", id),
       event
     );
 
