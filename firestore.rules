@@ -1,0 +1,339 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================================================
+    // FOX AI AGENCY — PRODUCTION FIRESTORE RULES V1
+    // ========================================================
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(
+        /databases/$(database)/documents/users/$(request.auth.uid)
+      );
+    }
+
+    function hasUserProfile() {
+      return signedIn() &&
+        exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        );
+    }
+
+    function role() {
+      return hasUserProfile()
+        ? userDoc().data.role
+        : null;
+    }
+
+    function userWorkspaceId() {
+      return hasUserProfile()
+        ? userDoc().data.workspaceId
+        : null;
+    }
+
+    function isSuperAdmin() {
+      return signedIn() &&
+        role() == "super_admin";
+    }
+
+    function isWorkspaceMember(workspaceId) {
+      return signedIn() &&
+        (
+          isSuperAdmin() ||
+          userWorkspaceId() == workspaceId
+        );
+    }
+
+    function ownsResource() {
+      return signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            resource.data.workspaceId != null &&
+            resource.data.workspaceId == userWorkspaceId()
+          )
+        );
+    }
+
+    function ownsNewResource() {
+      return signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            request.resource.data.workspaceId != null &&
+            request.resource.data.workspaceId == userWorkspaceId()
+          )
+        );
+    }
+
+    // ========================================================
+    // USER PROFILES
+    // ========================================================
+
+    match /users/{userId} {
+      allow read: if signedIn() &&
+        (
+          request.auth.uid == userId ||
+          isSuperAdmin()
+        );
+
+      // FOX PRODUCTION REGISTRATION:
+      // A newly authenticated user may create only their own
+      // client_owner profile, and only for a workspace that
+      // already declares them as ownerUid.
+      allow create: if signedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.role == "client_owner" &&
+        request.resource.data.workspaceId is string &&
+        exists(
+          /databases/$(database)/documents/workspaces/$(request.resource.data.workspaceId)
+        ) &&
+        get(
+          /databases/$(database)/documents/workspaces/$(request.resource.data.workspaceId)
+        ).data.ownerUid == request.auth.uid;
+
+      // Client cannot elevate role or jump between tenants.
+      allow update: if signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            request.auth.uid == userId &&
+            request.resource.data.role == resource.data.role &&
+            request.resource.data.workspaceId == resource.data.workspaceId
+          )
+        );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // ========================================================
+    // WORKSPACES
+    // ========================================================
+
+    match /workspaces/{workspaceId} {
+      allow read: if isWorkspaceMember(workspaceId);
+
+      // FOX PRODUCTION REGISTRATION:
+      //
+      // createUserWithEmailAndPassword authenticates the user first.
+      // The first workspace may therefore be created before users/{uid}.
+      //
+      // Critical protections:
+      // - document must not already exist
+      // - ownerUid must be the authenticated Firebase UID
+      // - client cannot choose another owner
+      allow create: if signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            !exists(
+              /databases/$(database)/documents/workspaces/$(workspaceId)
+            ) &&
+            request.resource.data.ownerUid == request.auth.uid &&
+            request.resource.data.ownerEmail == request.auth.token.email
+          )
+        );
+
+      // Tenant owners can change operational workspace settings,
+      // but never billing / entitlement / ownership security fields.
+      allow update: if signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            isWorkspaceMember(workspaceId) &&
+            !request.resource.data
+              .diff(resource.data)
+              .affectedKeys()
+              .hasAny([
+                "ownerUid",
+                "planId",
+                "status",
+                "subscriptionExpiresAt",
+                "aiConversationsUsed",
+                "extraConversationsLimit",
+                "extraPackages"
+              ])
+          )
+        );
+
+      allow delete: if isSuperAdmin();
+
+      // ------------------------------------------------------
+      // Workspace-scoped nested collections
+      // CRM events, secrets metadata, future tenant records.
+      // ------------------------------------------------------
+
+      match /{subCollection}/{documentId} {
+        allow read, write: if isWorkspaceMember(workspaceId);
+
+        match /{nestedPath=**} {
+          allow read, write: if isWorkspaceMember(workspaceId);
+        }
+      }
+    }
+
+    // ========================================================
+    // TENANT DATA COLLECTIONS
+    // Documents must contain workspaceId.
+    // ========================================================
+
+    match /crmLeads/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /appointments/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /menuItems/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /medicines/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /products/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /productOrders/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /complaints/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /knowledgeFacts/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /coupons/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /supportTickets/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /serviceRatings/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /courses/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /doctors/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /clinicServices/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    match /n8nWorkflows/{docId} {
+      allow read, update, delete: if ownsResource();
+      allow create: if ownsNewResource();
+    }
+
+    // ========================================================
+    // PAYMENTS
+    // ========================================================
+
+    match /payments/{paymentId} {
+
+      // Tenant can see its own payment.
+      // Super Admin sees all.
+      allow read: if signedIn() &&
+        (
+          isSuperAdmin() ||
+          resource.data.workspaceId == userWorkspaceId()
+        );
+
+      // Tenant may submit its own payment request.
+      allow create: if signedIn() &&
+        request.resource.data.workspaceId == userWorkspaceId() &&
+        request.resource.data.status == "pending";
+
+      // Approval/rejection is Super Admin only.
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // ========================================================
+    // AI MODEL ANALYTICS
+    // ========================================================
+
+    match /aiModelUsage/{docId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    match /aiModelHealth/{docId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ========================================================
+    // AGENCY-ONLY DATA
+    // ========================================================
+
+    match /activationCodes/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /audit_logs/{docId} {
+      allow read: if isSuperAdmin();
+      allow write: if signedIn();
+    }
+
+    match /gemini_metrics/{docId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+
+    // ========================================================
+    // SECRET VAULT
+    // ========================================================
+    //
+    // Browser access is completely forbidden.
+    // Firebase Admin SDK on the server bypasses Firestore rules.
+    // ========================================================
+
+    match /workspaceSecrets/{workspaceId} {
+      allow read, write: if false;
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // ========================================================
+    // DEFAULT DENY
+    // ========================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

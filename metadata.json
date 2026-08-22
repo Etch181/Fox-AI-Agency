@@ -1,0 +1,6 @@
+{
+  "name": "Fox AI Agency",
+  "description": "Enterprise SaaS platform for multi-tenant AI Agents on WhatsApp and Telegram with CRM, industry modules, Instapay payments, and Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

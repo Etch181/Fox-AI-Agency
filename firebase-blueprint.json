@@ -1,0 +1,149 @@
+{
+  "entities": {
+    "workspace": {
+      "title": "Workspace",
+      "description": "Multi-tenant workspace account for agency clients",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "industry": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "planId": { "type": "string", "enum": ["starter", "business", "enterprise"] },
+        "subscriptionExpiresAt": { "type": "string" },
+        "aiConversationsUsed": { "type": "number" },
+        "totalCustomers": { "type": "number" },
+        "totalAppointments": { "type": "number" },
+        "totalComplaints": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "industry", "ownerEmail", "status", "planId"]
+    },
+    "userProfile": {
+      "title": "User Profile",
+      "description": "Authenticated user profile associated with a workspace or super admin role",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "client_owner", "client_staff"] },
+        "workspaceId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "knowledgeFact": {
+      "title": "Knowledge Base Fact",
+      "description": "Business knowledge facts for training the AI agent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "fact": { "type": "string" },
+        "source": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "workspaceId", "fact", "approved"]
+    },
+    "appointment": {
+      "title": "Appointment",
+      "description": "Customer appointment booking record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "workspaceId", "customerName", "phone"]
+    },
+    "complaint": {
+      "title": "Complaint",
+      "description": "Escalated customer complaint record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "complaintText": { "type": "string" },
+        "status": { "type": "string" },
+        "severity": { "type": "string" }
+      },
+      "required": ["id", "workspaceId", "customerName", "complaintText"]
+    },
+    "crmLead": {
+      "title": "CRM Customer Lead",
+      "description": "Customer interaction lead entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "channel": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "workspaceId", "name", "phone"]
+    },
+    "supportTicket": {
+      "title": "Support Ticket",
+      "description": "Client technical support ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "workspaceName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "subject": { "type": "string" },
+        "category": { "type": "string" },
+        "priority": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "workspaceId", "clientEmail", "subject", "status"]
+    }
+  },
+  "firestore": {
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/workspace" },
+      "description": "Stores client workspace configurations and credentials"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/userProfile" },
+      "description": "Stores authenticated user profiles and tenant role assignments"
+    },
+    "/knowledgeFacts/{factId}": {
+      "schema": { "$ref": "#/entities/knowledgeFact" },
+      "description": "Knowledge facts used by Gemini AI"
+    },
+    "/appointments/{appointmentId}": {
+      "schema": { "$ref": "#/entities/appointment" },
+      "description": "Client appointment entries"
+    },
+    "/complaints/{complaintId}": {
+      "schema": { "$ref": "#/entities/complaint" },
+      "description": "Client feedback and escalated issues"
+    },
+    "/crmLeads/{leadId}": {
+      "schema": { "$ref": "#/entities/crmLead" },
+      "description": "Workspace customer CRM leads"
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/supportTicket" },
+      "description": "Technical support and service tickets"
+    }
+  }
+}
