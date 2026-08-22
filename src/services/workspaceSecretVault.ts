@@ -7,6 +7,7 @@ import {
 export type WorkspaceSecretName =
   | "telegramBotToken"
   | "whatsappAccessToken"
+  | "whatsappVerifyToken"
   | "facebookPageAccessToken"
   | "facebookVerifyToken"
   | "googleSheetsAccessToken";

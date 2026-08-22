@@ -2645,7 +2645,21 @@ async function callWorkspaceTelegramApi(
 // FIREBASE API AUTHENTICATION
 // ==========================================================
 
-type FoxAuthenticatedRequest = any;
+declare global {
+  namespace Express {
+    interface Request {
+      foxAuth?: {
+        uid: string;
+        email?: string | null;
+        role?: string | null;
+        workspaceId?: string | null;
+        profile?: Record<string, any>;
+      };
+    }
+  }
+}
+
+type FoxAuthenticatedRequest = express.Request;
 
 async function authenticateFirebaseRequest(
   req: FoxAuthenticatedRequest,
