@@ -1,0 +1,1008 @@
+import {
+  SubscriptionPlan,
+  Workspace,
+  ActivationCode,
+  InstapayPayment,
+  CustomerLead,
+  Appointment,
+  Doctor,
+  MenuItem,
+  MedicineItem,
+  StoreProduct,
+  Complaint,
+  KnowledgeBaseFact,
+  N8nWorkflow,
+  User,
+  SupportTicket,
+  AuditLog,
+  GeminiTenantMetrics,
+  GeminiErrorLog,
+} from "../types";
+
+export const INITIAL_PLANS: SubscriptionPlan[] = [
+  {
+    id: "starter",
+    name: "Fox Starter",
+    priceEGP: 0,
+    duration: "7 Days Trial",
+    aiConversationLimit: 50,
+    channels: ["telegram"],
+    features: [
+      "1 AI Agent",
+      "Telegram Only",
+      "50 AI Conversations",
+      "Basic CRM & Leads",
+      "Appointment Booking",
+      "Complaint System",
+      "Email Support",
+    ],
+    badge: "Free Trial",
+  },
+  {
+    id: "business",
+    name: "Fox Business",
+    priceEGP: 1000,
+    duration: "1 Month",
+    aiConversationLimit: 1000,
+    channels: ["whatsapp", "telegram"],
+    features: [
+      "Everything in Starter",
+      "WhatsApp & Telegram Integration",
+      "1000 AI Conversations/month",
+      "Unlimited CRM & Customers",
+      "Restaurant Menu Upload",
+      "Pharmacy Medicine Upload",
+      "Excel & Google Sheets Import",
+      "Analytics Dashboard",
+      "Priority Support",
+    ],
+    badge: "Most Popular",
+  },
+  {
+    id: "enterprise",
+    name: "Fox Enterprise",
+    priceEGP: 2000,
+    duration: "1 Month",
+    aiConversationLimit: -1, // Unlimited
+    channels: ["whatsapp", "telegram"],
+    features: [
+      "Everything in Business",
+      "Unlimited AI Conversations",
+      "n8n Automation Engine",
+      "Multiple AI Agents",
+      "Custom Workflows & API Access",
+      "Custom Prompt Builder",
+      "Multi-Staff Accounts & Roles",
+      "24/7 Premium VIP Support",
+      "Business Intelligence Reports",
+    ],
+    badge: "Enterprise Grade",
+  },
+];
+
+export const DEMO_USERS: User[] = [
+  {
+    id: "user_admin",
+    name: "Hesham M. (Agency Owner)",
+    email: "info.hesham.m@gmail.com",
+    password: "",
+    role: "super_admin",
+    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    createdAt: "2026-01-01",
+  },
+  {
+    id: "user_clinic",
+    name: "Dr. Tarek Al-Sayed",
+    email: "clinic@foxai.com",
+    role: "client_owner",
+    workspaceId: "ws_clinic",
+    avatar: "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=150&auto=format&fit=crop&q=80",
+    createdAt: "2026-02-10",
+  },
+  {
+    id: "user_restaurant",
+    name: "Chef Karim Nabil",
+    email: "bella@foxai.com",
+    role: "client_owner",
+    workspaceId: "ws_restaurant",
+    avatar: "https://images.unsplash.com/photo-1577219491135-ce391730fb2c?w=150&auto=format&fit=crop&q=80",
+    createdAt: "2026-03-01",
+  },
+  {
+    id: "user_pharmacy",
+    name: "Dr. Amira Mahmoud",
+    email: "pharmacy@foxai.com",
+    role: "client_owner",
+    workspaceId: "ws_pharmacy",
+    avatar: "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=150&auto=format&fit=crop&q=80",
+    createdAt: "2026-03-15",
+  },
+];
+
+export const INITIAL_WORKSPACES: Workspace[] = [
+  {
+    id: "ws_clinic",
+    name: "Al-Shifa Specialized Clinic",
+    industry: "Clinic",
+    ownerName: "Dr. Tarek Al-Sayed",
+    ownerEmail: "clinic@foxai.com",
+    phone: "+201012345678",
+    status: "active",
+    planId: "enterprise",
+    subscriptionExpiresAt: "2026-08-30",
+    aiConversationsUsed: 420,
+    creditBalance: 580,
+    totalCustomers: 184,
+    totalAppointments: 92,
+    totalComplaints: 3,
+    createdAt: "2026-02-10",
+    aiSettings: {
+      agentName: "Shifa AI Receptionist",
+      customPrompt: "Always ask patients for their phone number and preferred doctor when scheduling appointments. Be warm and comforting.",
+      tone: "Empathetic",
+      autoBookingEnabled: true,
+      autoComplaintEscalation: true,
+      languageMode: "auto",
+    },
+  },
+  {
+    id: "ws_restaurant",
+    name: "Bella Italia Cairo",
+    industry: "Restaurant",
+    ownerName: "Chef Karim Nabil",
+    ownerEmail: "bella@foxai.com",
+    phone: "+201198765432",
+    status: "active",
+    planId: "business",
+    subscriptionExpiresAt: "2026-08-15",
+    aiConversationsUsed: 650,
+    creditBalance: 350,
+    totalCustomers: 310,
+    totalAppointments: 45,
+    totalComplaints: 5,
+    createdAt: "2026-03-01",
+    aiSettings: {
+      agentName: "Bella AI Concierge",
+      customPrompt: "Promote our special Truffle Pasta and wood-fired Pizza. Recommend reservations for weekend evenings.",
+      tone: "Friendly",
+      autoBookingEnabled: true,
+      autoComplaintEscalation: true,
+      languageMode: "auto",
+    },
+  },
+  {
+    id: "ws_pharmacy",
+    name: "El-Gomhouria Modern Pharmacy",
+    industry: "Pharmacy",
+    ownerName: "Dr. Amira Mahmoud",
+    ownerEmail: "pharmacy@foxai.com",
+    phone: "+201234567890",
+    status: "active",
+    planId: "business",
+    subscriptionExpiresAt: "2026-08-20",
+    aiConversationsUsed: 310,
+    creditBalance: 690,
+    totalCustomers: 145,
+    totalAppointments: 0,
+    totalComplaints: 1,
+    createdAt: "2026-03-15",
+    aiSettings: {
+      agentName: "PharmaCare AI",
+      customPrompt: "Always remind customers that prescription antibiotics require a valid medical prescription before delivery.",
+      tone: "Professional",
+      autoBookingEnabled: false,
+      autoComplaintEscalation: true,
+      languageMode: "auto",
+    },
+  },
+  {
+    id: "ws_store",
+    name: "Urban Wear Retail",
+    industry: "Retail",
+    ownerName: "Samer Hassan",
+    ownerEmail: "store@foxai.com",
+    phone: "+201009988776",
+    status: "pending",
+    planId: "starter",
+    subscriptionExpiresAt: "2026-08-03",
+    aiConversationsUsed: 12,
+    creditBalance: 88,
+    totalCustomers: 28,
+    totalAppointments: 0,
+    totalComplaints: 0,
+    createdAt: "2026-07-20",
+    aiSettings: {
+      agentName: "Urban AI Assistant",
+      customPrompt: "Help customers pick clothing sizes and check current seasonal discount items.",
+      tone: "Friendly",
+      autoBookingEnabled: false,
+      autoComplaintEscalation: false,
+      languageMode: "auto",
+    },
+  },
+];
+
+export const INITIAL_ACTIVATION_CODES: ActivationCode[] = [
+  {
+    id: "act_1",
+    code: "FOX-BUS-9921-X",
+    planId: "business",
+    durationDays: 30,
+    isUsed: true,
+    createdBy: "info.hesham.m@gmail.com",
+    usedByWorkspaceId: "ws_restaurant",
+    usedByWorkspaceName: "Bella Italia Cairo",
+    createdAt: "2026-07-01",
+    expiresAt: "2026-12-31",
+  },
+  {
+    id: "act_2",
+    code: "FOX-ENT-8842-A",
+    planId: "enterprise",
+    durationDays: 30,
+    isUsed: false,
+    createdBy: "info.hesham.m@gmail.com",
+    createdAt: "2026-07-25",
+    expiresAt: "2026-12-31",
+  },
+  {
+    id: "act_3",
+    code: "FOX-BUS-1102-M",
+    planId: "business",
+    durationDays: 30,
+    isUsed: false,
+    createdBy: "info.hesham.m@gmail.com",
+    createdAt: "2026-07-26",
+    expiresAt: "2026-12-31",
+  },
+];
+
+export const INITIAL_PAYMENTS: InstapayPayment[] = [
+  {
+    id: "pay_101",
+    workspaceId: "ws_restaurant",
+    workspaceName: "Bella Italia Cairo",
+    planId: "business",
+    amountEGP: 1000,
+    screenshotUrl: "https://images.unsplash.com/photo-1556742049-0a67dd395563?w=500&auto=format&fit=crop&q=80",
+    transactionRef: "INSTA-8839210-EGP",
+    status: "approved",
+    submittedAt: "2026-07-01 14:30",
+    approvedAt: "2026-07-01 15:00",
+    generatedCode: "FOX-BUS-9921-X",
+  },
+  {
+    id: "pay_102",
+    workspaceId: "ws_pharmacy",
+    workspaceName: "El-Gomhouria Modern Pharmacy",
+    planId: "business",
+    amountEGP: 1000,
+    screenshotUrl: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?w=500&auto=format&fit=crop&q=80",
+    transactionRef: "INSTA-4492019-EGP",
+    status: "pending",
+    submittedAt: "2026-07-27 10:15",
+  },
+];
+
+export const INITIAL_CRM_LEADS: CustomerLead[] = [
+  {
+    id: "lead_1",
+    workspaceId: "ws_clinic",
+    name: "Ahmed Radwan",
+    phone: "+201001112223",
+    channel: "whatsapp",
+    status: "Customer",
+    tags: ["VIP", "Dental"],
+    notes: "Patient requested teeth whitening package and confirmed slot with Dr. Mona.",
+    totalSpentEGP: 2500,
+    createdAt: "2026-07-10",
+    conversationHistory: [
+      { sender: "user", text: "Hello, I want to inquire about teeth whitening prices.", time: "10:00 AM" },
+      { sender: "bot", text: "Welcome Mr. Ahmed! Our teeth whitening session is 2,500 EGP with Dr. Mona Hassan. Would you like to schedule an appointment?", time: "10:01 AM" },
+      { sender: "user", text: "Yes please, tomorrow at 5 PM.", time: "10:02 AM" },
+      { sender: "bot", text: "Your appointment is confirmed for tomorrow at 5:00 PM with Dr. Mona. We have updated your patient file!", time: "10:02 AM" }
+    ],
+  },
+  {
+    id: "lead_2",
+    workspaceId: "ws_clinic",
+    name: "Mariam El-Ghandour",
+    phone: "+201122334455",
+    channel: "telegram",
+    status: "Prospect",
+    tags: ["Dermatology"],
+    notes: "Asked about laser hair removal packages. Needs follow up next Monday.",
+    followUpDate: "2026-08-03",
+    totalSpentEGP: 0,
+    createdAt: "2026-07-22",
+  },
+  {
+    id: "lead_3",
+    workspaceId: "ws_restaurant",
+    name: "Omar Khaled",
+    phone: "+201555443322",
+    channel: "whatsapp",
+    status: "Customer",
+    tags: ["Table Reservation", "Weekend"],
+    notes: "Reserved table for 6 people on Friday evening.",
+    totalSpentEGP: 1800,
+    createdAt: "2026-07-24",
+  },
+];
+
+export const INITIAL_DOCTORS: Doctor[] = [
+  {
+    id: "doc_1",
+    workspaceId: "ws_clinic",
+    name: "Mona Hassan",
+    specialty: "Dentistry & Cosmetic Dentistry",
+    slots: ["10:00 AM", "12:00 PM", "03:00 PM", "05:00 PM"],
+  },
+  {
+    id: "doc_2",
+    workspaceId: "ws_clinic",
+    name: "Sherif Amer",
+    specialty: "Dermatology & Laser Specialist",
+    slots: ["01:00 PM", "04:00 PM", "06:00 PM", "08:00 PM"],
+  },
+  {
+    id: "doc_3",
+    workspaceId: "ws_clinic",
+    name: "Khaled Zaki",
+    specialty: "Orthopedics",
+    slots: ["11:00 AM", "02:00 PM", "07:00 PM"],
+  },
+];
+
+export const INITIAL_APPOINTMENTS: Appointment[] = [
+  {
+    id: "apt_1",
+    workspaceId: "ws_clinic",
+    doctorName: "Mona Hassan",
+    specialty: "Dentistry",
+    patientName: "Ahmed Radwan",
+    patientPhone: "+201001112223",
+    date: "2026-07-28",
+    timeSlot: "05:00 PM",
+    status: "Confirmed",
+    notes: "Teeth Whitening session",
+  },
+  {
+    id: "apt_2",
+    workspaceId: "ws_clinic",
+    doctorName: "Sherif Amer",
+    specialty: "Dermatology",
+    patientName: "Nouran Fathy",
+    patientPhone: "+201299887766",
+    date: "2026-07-28",
+    timeSlot: "04:00 PM",
+    status: "Scheduled",
+    notes: "Skin Consultation",
+  },
+];
+
+export const INITIAL_MENU: MenuItem[] = [
+  {
+    id: "m_1",
+    workspaceId: "ws_restaurant",
+    name: "Truffle & Mushroom Pasta",
+    category: "Main Dishes",
+    price: 320,
+    description: "Fettuccine pasta in rich black truffle cream sauce with fresh mushrooms and parmesan.",
+    available: true,
+  },
+  {
+    id: "m_2",
+    workspaceId: "ws_restaurant",
+    name: "Quattro Formaggi Wood-Fired Pizza",
+    category: "Pizza",
+    price: 280,
+    description: "Mozzarella, Gorgonzola, Parmesan, and Pecorino cheese on crispy sourdough crust.",
+    available: true,
+  },
+  {
+    id: "m_3",
+    workspaceId: "ws_restaurant",
+    name: "Classic Tiramisu",
+    category: "Desserts",
+    price: 140,
+    description: "Authentic Italian espresso-soaked ladyfingers with creamy mascarpone.",
+    available: true,
+  },
+];
+
+export interface ProductOrder {
+  id: string;
+  workspaceId: string;
+  customerName: string;
+  customerPhone: string;
+  channel: 'whatsapp' | 'telegram' | 'web';
+  items: {
+    itemId?: string;
+    itemName: string;
+    quantity: number;
+    priceEGP: number;
+    available: boolean;
+    alternativeSuggested?: string;
+  }[];
+  totalAmountEGP: number;
+  status: 'pending_verification' | 'confirmed_available' | 'alternative_offered' | 'dispatched' | 'cancelled';
+  ownerNotes?: string;
+  createdAt: string;
+}
+
+export interface ServiceRating {
+  id: string;
+  workspaceId: string;
+  customerName: string;
+  customerPhone?: string;
+  channel: 'whatsapp' | 'telegram' | 'web';
+  rating: number; // 1 to 5 stars
+  feedback: string;
+  createdAt: string;
+}
+
+export const INITIAL_PRODUCT_ORDERS: ProductOrder[] = [
+  {
+    id: "ord_101",
+    workspaceId: "ws_pharmacy",
+    customerName: "محمود سيد",
+    customerPhone: "+201011223344",
+    channel: "telegram",
+    items: [
+      { itemName: "Augmentin 1g Tablets", quantity: 1, priceEGP: 115, available: true },
+      { itemName: "Panadol Extra", quantity: 2, priceEGP: 48, available: true }
+    ],
+    totalAmountEGP: 211,
+    status: "pending_verification",
+    ownerNotes: "طلب جاري التأكد من توفر جميع الأصناف بالمخزن الرئيسي",
+    createdAt: "2026-08-01 10:15"
+  },
+  {
+    id: "ord_102",
+    workspaceId: "ws_pharmacy",
+    customerName: "سارة فاروق",
+    customerPhone: "+201299887711",
+    channel: "whatsapp",
+    items: [
+      { itemName: "Cataflam 50mg", quantity: 1, priceEGP: 62, available: false, alternativeSuggested: "Declophen 50mg Tablets (35 EGP)" }
+    ],
+    totalAmountEGP: 35,
+    status: "alternative_offered",
+    ownerNotes: "المنتج الأصلي غير متوفر - تم اقتراح ديكلوفين بديل متوفر",
+    createdAt: "2026-08-01 11:30"
+  }
+];
+
+export const INITIAL_SERVICE_RATINGS: ServiceRating[] = [
+  {
+    id: "rat_agency_1",
+    workspaceId: "ws_agency",
+    customerName: "د. طارق السيد (عيادة الشفاء التخصصية)",
+    customerPhone: "+201011112222",
+    channel: "telegram",
+    rating: 5,
+    feedback: "بوت وكالة FOX AI ممتاز للغاية، ساعدنا في تنظيم المواعيد ورفع كفاءة العيادة، والدعم الفني متواجد 24/7.",
+    createdAt: "2026-08-01 12:00"
+  },
+  {
+    id: "rat_agency_2",
+    workspaceId: "ws_agency",
+    customerName: "شيف كريم نبيل (مطعم كايرو جورميه)",
+    customerPhone: "+201022223333",
+    channel: "whatsapp",
+    rating: 5,
+    feedback: "سرعة ربط المنيو والبدائل احترافية جداً، والعملاء مبسوطين جداً من سرعة استجابة البوت تلقائياً.",
+    createdAt: "2026-08-01 13:30"
+  },
+  {
+    id: "rat_agency_3",
+    workspaceId: "ws_agency",
+    customerName: "د. منى حسن (صيدلية العزبي اكسبريس)",
+    customerPhone: "+201033334444",
+    channel: "telegram",
+    rating: 4,
+    feedback: "تجربة ممتازة في ربط أدوية الصيدلية والأدوية البديلة عبر أتمتة n8n.",
+    createdAt: "2026-08-01 14:15"
+  },
+  {
+    id: "rat_1",
+    workspaceId: "ws_clinic",
+    customerName: "أحمد رضوان",
+    customerPhone: "+201001112223",
+    channel: "whatsapp",
+    rating: 5,
+    feedback: "خدمة ممتازة وسريعة جداً والبوت جاوب على كل استفساراتي وسهل الحجز!",
+    createdAt: "2026-08-01 09:00"
+  },
+  {
+    id: "rat_2",
+    workspaceId: "ws_pharmacy",
+    customerName: "مريم علي",
+    customerPhone: "+201122334455",
+    channel: "telegram",
+    rating: 4,
+    feedback: "الرد سريع جداً واقترح لي دواء بديل ممتاز متوفر بنفس المادة الفعالة.",
+    createdAt: "2026-08-01 11:10"
+  }
+];
+
+export const INITIAL_MEDICINES: MedicineItem[] = [
+  {
+    id: "med_1",
+    workspaceId: "ws_pharmacy",
+    name: "Augmentin 1g Tablets",
+    category: "Antibiotics",
+    price: 115,
+    stock: 45,
+    requiresPrescription: true,
+    instructions: "Take 1 tablet every 12 hours after food.",
+    available: true,
+    alternativeItemName: "Curam 1g Tablets",
+    alternativeNotes: "نفس المادة الفعالة (Amoxicillin/Clavulanate) بسعر 98 EGP"
+  },
+  {
+    id: "med_2",
+    workspaceId: "ws_pharmacy",
+    name: "Panadol Extra",
+    category: "Pain Relief",
+    price: 48,
+    stock: 120,
+    requiresPrescription: false,
+    instructions: "1 to 2 tablets every 6 hours as needed.",
+    available: true,
+    alternativeItemName: "Paramol Extra",
+    alternativeNotes: "بديل مسكن آمن ومتوفر بالمخزن بسعر 30 EGP"
+  },
+  {
+    id: "med_3",
+    workspaceId: "ws_pharmacy",
+    name: "Cataflam 50mg",
+    category: "Anti-inflammatory",
+    price: 62,
+    stock: 0,
+    requiresPrescription: false,
+    instructions: "Take after meals for pain/fever.",
+    available: false,
+    alternativeItemName: "Declophen 50mg Tablets",
+    alternativeNotes: "بديل ممتاز متوفر بالمخزن بنفس الفاعلية بسعر 35 EGP"
+  },
+];
+
+export const INITIAL_PRODUCTS: StoreProduct[] = [
+  {
+    id: "p_1",
+    workspaceId: "ws_store",
+    name: "Oversized Cotton Hoodie - Onyx Black",
+    category: "Apparel",
+    price: 850,
+    stock: 35,
+    sku: "HOOD-BLK-001",
+    available: true,
+    alternativeItemName: "Classic Zip Hoodie - Charcoal Gray",
+    alternativeNotes: "بديل مميز بقطن 100% بسعر 790 EGP"
+  },
+  {
+    id: "p_2",
+    workspaceId: "ws_store",
+    name: "Cargo Streetwear Pants - Khaki",
+    category: "Apparel",
+    price: 720,
+    stock: 0,
+    sku: "CARGO-KHK-002",
+    available: false,
+    alternativeItemName: "Utility Cargo Pants - Army Green",
+    alternativeNotes: "بديل متاح حالياً بنفس المقاسات بسعر 690 EGP"
+  },
+];
+
+export const INITIAL_COMPLAINTS: Complaint[] = [
+  {
+    id: "cmp_1",
+    workspaceId: "ws_clinic",
+    customerName: "Hassan Al-Sawy",
+    phone: "+201088776655",
+    channel: "whatsapp",
+    issue: "Waited 45 minutes beyond my scheduled appointment time yesterday.",
+    aiResponse: "We deeply apologize for the delay Mr. Hassan. Doctor schedule ran long due to an emergency procedure. Our management has flagged your account for priority check-in on your next visit.",
+    status: "Resolved",
+    priority: "Medium",
+    date: "2026-07-25",
+  },
+  {
+    id: "cmp_2",
+    workspaceId: "ws_restaurant",
+    customerName: "Noha Mostafa",
+    phone: "+201144332211",
+    channel: "telegram",
+    issue: "My order delivery took 1 hour and the pizza was lukewarm.",
+    aiResponse: "We sincerely apologize Noha! I have submitted this complaint to Chef Karim and our manager. We are sending you a 20% discount coupon on your next order.",
+    status: "Open",
+    priority: "High",
+    date: "2026-07-27",
+  },
+];
+
+export const INITIAL_KNOWLEDGE_FACTS: KnowledgeBaseFact[] = [
+  {
+    id: "kb_1",
+    workspaceId: "ws_clinic",
+    question: "What are the clinic working hours?",
+    answer: "Our clinic is open Saturday to Thursday from 10:00 AM to 9:00 PM. Fridays are reserved for emergency surgeries.",
+    category: "Hours & Location",
+    approved: true,
+    source: "manual",
+    createdAt: "2026-02-15",
+  },
+  {
+    id: "kb_2",
+    workspaceId: "ws_clinic",
+    question: "Do you accept medical insurance?",
+    answer: "Yes, we accept MetLife, Bupa, AXA, and NextCare medical insurance for outpatient consultations.",
+    category: "Insurance",
+    approved: true,
+    source: "manual",
+    createdAt: "2026-02-16",
+  },
+  {
+    id: "kb_3",
+    workspaceId: "ws_clinic",
+    question: "How long does a dental consultation take?",
+    answer: "A standard consultation takes approximately 30 minutes including initial X-ray scanning.",
+    category: "Services",
+    approved: false, // Pending self-learning approval
+    source: "ai_extracted",
+    createdAt: "2026-07-26",
+  },
+];
+
+export const INITIAL_N8N_WORKFLOWS: N8nWorkflow[] = [
+  {
+    id: "wf_1",
+    title: "Appointment WhatsApp Reminder (24h Before)",
+    description: "Sends an automated WhatsApp notification to patients 24 hours prior to scheduled clinic time with Confirm/Reschedule buttons.",
+    triggerEvent: "appointment.scheduled",
+    status: "active",
+    executionsCount: 142,
+    lastRunAt: "2026-07-27 12:00",
+  },
+  {
+    id: "wf_2",
+    title: "Instapay Payment Approval & Activation Code Sync",
+    description: "Triggers on Admin Instapay approval to generate a 30-day single-use code and send via Email/WhatsApp.",
+    triggerEvent: "payment.approved",
+    status: "active",
+    executionsCount: 88,
+    lastRunAt: "2026-07-26 15:30",
+  },
+  {
+    id: "wf_3",
+    title: "Google Sheets CRM Instant Export",
+    description: "Syncs newly captured Telegram & WhatsApp leads into client Google Sheets spreadsheet in real-time.",
+    triggerEvent: "lead.created",
+    status: "active",
+    executionsCount: 310,
+    lastRunAt: "2026-07-27 14:10",
+  },
+];
+
+export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
+  {
+    id: "TICK-1001",
+    workspaceId: "ws_clinic",
+    workspaceName: "Al-Hayat Medical Center",
+    clientEmail: "clinic@foxai.com",
+    clientPhone: "+201011112222",
+    subject: "Need help configuring Telegram Bot Auto-Reply Prompt",
+    category: "AI Agent",
+    priority: "High",
+    status: "In Progress",
+    createdAt: "2026-07-26 10:15",
+    updatedAt: "2026-07-27 14:30",
+    replies: [
+      {
+        id: "rep-1",
+        senderId: "user_clinic",
+        senderName: "Dr. Tarek Al-Sayed",
+        senderRole: "client_owner",
+        message: "Hello Fox AI Team! The Telegram bot is answering patient questions well, but we want it to specifically ask for the patient's preferred time slot before confirming appointments. How can we update the system prompt?",
+        createdAt: "2026-07-26 10:15",
+      },
+      {
+        id: "rep-2",
+        senderId: "user_admin",
+        senderName: "Hesham M. (Super Admin)",
+        senderRole: "super_admin",
+        message: "Hi Dr. Tarek! You can update this in your workspace under 'AI Agent & Custom Prompts'. I've also enabled the 'Auto Booking Slot Enforcer' in your AI settings. Let us know if you need further prompt adjustments!",
+        createdAt: "2026-07-27 14:30",
+      },
+    ],
+  },
+  {
+    id: "TICK-1002",
+    workspaceId: "ws_restaurant",
+    workspaceName: "Cairo Gourmet Restaurant",
+    clientEmail: "restaurant@foxai.com",
+    clientPhone: "+201022223333",
+    subject: "Instapay Subscription Renewal Receipt Upload Verification",
+    category: "Billing",
+    priority: "Medium",
+    status: "Open",
+    createdAt: "2026-07-27 09:00",
+    updatedAt: "2026-07-27 09:00",
+    replies: [
+      {
+        id: "rep-3",
+        senderId: "user_restaurant",
+        senderName: "Chef Karim Nabil",
+        senderRole: "client_owner",
+        message: "We just submitted our Instapay payment for renewing the Fox Business plan (1000 EGP) with transaction ref INSTA-882109. Please verify and extend our subscription date.",
+        createdAt: "2026-07-27 09:00",
+      },
+    ],
+  },
+  {
+    id: "TICK-1003",
+    workspaceId: "ws_pharmacy",
+    workspaceName: "El-Ezaby Express Pharmacy",
+    clientEmail: "pharmacy@foxai.com",
+    clientPhone: "+201033334444",
+    subject: "Requesting n8n Workflow integration for Excel medicine stock auto-update",
+    category: "Feature Request",
+    priority: "Low",
+    status: "Resolved",
+    createdAt: "2026-07-20 16:40",
+    updatedAt: "2026-07-22 11:20",
+    replies: [
+      {
+        id: "rep-4",
+        senderId: "user_pharmacy",
+        senderName: "Dr. Mona Hassan",
+        senderRole: "client_owner",
+        message: "Can we import our inventory via Google Sheets and have n8n sync stock levels every evening?",
+        createdAt: "2026-07-20 16:40",
+      },
+      {
+        id: "rep-5",
+        senderId: "user_admin",
+        senderName: "Hesham M. (Super Admin)",
+        senderRole: "super_admin",
+        message: "Great news Dr. Mona! We configured the n8n Google Sheets inventory sync workflow for your account. You can test it under 'n8n Automation' in your sidebar.",
+        createdAt: "2026-07-22 11:20",
+      },
+    ],
+  },
+];
+
+export const INITIAL_AUDIT_LOGS: AuditLog[] = [
+  {
+    id: "LOG-1001",
+    timestamp: "2026-07-28 05:15:22",
+    actorName: "Hesham M. (Super Admin)",
+    actorEmail: "info.hesham.m@gmail.com",
+    actorRole: "super_admin",
+    action: "Instapay Payment Verification & Code Generation",
+    category: "billing",
+    severity: "info",
+    target: "Payment #PAY-2001 (Cairo Gourmet Restaurant)",
+    details: "Approved Instapay receipt ref INSTA-882109 for 1000 EGP. Automatically generated activation code [FOX-BUS-8821].",
+    ipAddress: "197.38.12.45",
+    metadata: { paymentId: "PAY-2001", amount: 1000, code: "FOX-BUS-8821" },
+  },
+  {
+    id: "LOG-1002",
+    timestamp: "2026-07-28 04:30:10",
+    actorName: "Workspace Isolation Guard",
+    actorEmail: "system.guard@foxaiagency.com",
+    actorRole: "system",
+    action: "Cross-Tenant Access Attempt Blocked",
+    category: "security",
+    severity: "warning",
+    target: "Workspace #ws_clinic (Cairo Care Clinic)",
+    details: "Blocked unauthorized tenant data query attempt from user session attempting to access unassigned workspace scope.",
+    ipAddress: "156.202.18.99",
+    metadata: { attemptedWorkspaceId: "ws_clinic", blockedReason: "WorkspaceId Mismatch" },
+  },
+  {
+    id: "LOG-1003",
+    timestamp: "2026-07-27 18:45:00",
+    actorName: "Hesham M. (Super Admin)",
+    actorEmail: "info.hesham.m@gmail.com",
+    actorRole: "super_admin",
+    action: "Activation Code Generated",
+    category: "billing",
+    severity: "info",
+    target: "Plan: Fox Business (30 Days)",
+    details: "Generated activation code [FOX-9981-BIZ] valid for 30 days.",
+    ipAddress: "197.38.12.45",
+  },
+  {
+    id: "LOG-1004",
+    timestamp: "2026-07-27 14:30:15",
+    actorName: "Hesham M. (Super Admin)",
+    actorEmail: "info.hesham.m@gmail.com",
+    actorRole: "super_admin",
+    action: "Support Ticket Reply & Status Update",
+    category: "ticket",
+    severity: "info",
+    target: "Ticket #TICK-1001 (Dr. Tarek Al-Sayed)",
+    details: "Replied to prompt customizer ticket and enabled auto booking slot enforcer rule.",
+    ipAddress: "197.38.12.45",
+  },
+  {
+    id: "LOG-1005",
+    timestamp: "2026-07-26 11:20:05",
+    actorName: "Dr. Tarek Al-Sayed",
+    actorEmail: "clinic@foxai.com",
+    actorRole: "client_owner",
+    action: "Telegram Bot Token Connected",
+    category: "api",
+    severity: "info",
+    target: "Workspace #ws_clinic",
+    details: "Successfully validated and connected official Telegram Bot Token with webhook endpoint.",
+    ipAddress: "102.189.4.2",
+  },
+  {
+    id: "LOG-1006",
+    timestamp: "2026-07-25 09:12:40",
+    actorName: "Hesham M. (Super Admin)",
+    actorEmail: "info.hesham.m@gmail.com",
+    actorRole: "super_admin",
+    action: "Subscription Plan Pricing Modified",
+    category: "system",
+    severity: "warning",
+    target: "Plan: Enterprise Tier",
+    details: "Updated Fox Enterprise plan conversation limit and features matrix.",
+    ipAddress: "197.38.12.45",
+  },
+  {
+    id: "LOG-1007",
+    timestamp: "2026-07-24 16:05:00",
+    actorName: "Security Authentication Engine",
+    actorEmail: "auth@foxaiagency.com",
+    actorRole: "system",
+    action: "Super Admin Authentication Succeeded",
+    category: "authentication",
+    severity: "info",
+    target: "User: info.hesham.m@gmail.com",
+    details: "Successful login via AuthPortal with active 2FA session verification.",
+    ipAddress: "197.38.12.45",
+  },
+  {
+    id: "LOG-1008",
+    timestamp: "2026-07-23 22:10:14",
+    actorName: "System Guard",
+    actorEmail: "security@foxaiagency.com",
+    actorRole: "system",
+    action: "Multiple Failed Login Attempt Detected",
+    category: "security",
+    severity: "critical",
+    target: "IP 41.235.90.12",
+    details: "4 consecutive failed password verification attempts for email admin@fakefox.com. Rate limiting enforced.",
+    ipAddress: "41.235.90.12",
+  },
+];
+
+export const INITIAL_GEMINI_METRICS: GeminiTenantMetrics[] = [
+  {
+    workspaceId: "ws_clinic",
+    workspaceName: "Al-Shifa Specialized Clinic",
+    industry: "Clinic",
+    planId: "enterprise",
+    activeModel: "gemini-2.5-flash",
+    totalCalls: 1420,
+    successfulCalls: 1402,
+    errorCalls: 18,
+    errorRatePercent: 1.27,
+    avgLatencyMs: 412,
+    p95LatencyMs: 780,
+    status: "healthy",
+    lastCallTimestamp: "2026-07-28 05:32:10",
+    rpm: 24,
+    tpm: 12400,
+    latencyTrend: [420, 390, 410, 450, 380, 412, 405, 430, 418, 412],
+    errorTrend: [1, 0, 2, 0, 1, 0, 1, 3, 0, 1],
+    recentErrorLogs: [
+      {
+        id: "ERR-901",
+        timestamp: "2026-07-28 05:12:00",
+        workspaceId: "ws_clinic",
+        workspaceName: "Al-Shifa Specialized Clinic",
+        errorCode: "429_RATE_LIMIT",
+        errorMessage: "Quota exceeded for quota metric 'GenerateContent requests per minute'",
+        latencyMs: 120,
+        promptSnippet: "Schedule appointment for Dr. Tarek on Friday 5 PM...",
+        model: "gemini-2.5-flash",
+      },
+    ],
+  },
+  {
+    workspaceId: "ws_restaurant",
+    workspaceName: "Bella Italia Cairo",
+    industry: "Restaurant",
+    planId: "business",
+    activeModel: "gemini-2.5-flash",
+    totalCalls: 2850,
+    successfulCalls: 2790,
+    errorCalls: 60,
+    errorRatePercent: 2.11,
+    avgLatencyMs: 385,
+    p95LatencyMs: 690,
+    status: "healthy",
+    lastCallTimestamp: "2026-07-28 05:33:02",
+    rpm: 42,
+    tpm: 21800,
+    latencyTrend: [380, 375, 410, 390, 385, 370, 395, 400, 382, 385],
+    errorTrend: [2, 1, 3, 0, 2, 1, 4, 2, 1, 0],
+    recentErrorLogs: [
+      {
+        id: "ERR-902",
+        timestamp: "2026-07-28 04:55:12",
+        workspaceId: "ws_restaurant",
+        workspaceName: "Bella Italia Cairo",
+        errorCode: "500_TIMEOUT",
+        errorMessage: "Upstream Google Gemini API Gateway socket connection timed out after 10000ms",
+        latencyMs: 10002,
+        promptSnippet: "Check table availability for 8 people with Truffle Pasta menu...",
+        model: "gemini-2.5-flash",
+      },
+    ],
+  },
+  {
+    workspaceId: "ws_pharmacy",
+    workspaceName: "El-Gomhouria Modern Pharmacy",
+    industry: "Pharmacy",
+    planId: "business",
+    activeModel: "gemini-2.5-flash",
+    totalCalls: 1180,
+    successfulCalls: 1085,
+    errorCalls: 95,
+    errorRatePercent: 8.05,
+    avgLatencyMs: 820,
+    p95LatencyMs: 1650,
+    status: "degraded",
+    lastCallTimestamp: "2026-07-28 05:31:45",
+    rpm: 18,
+    tpm: 9200,
+    latencyTrend: [650, 710, 780, 890, 920, 850, 810, 840, 830, 820],
+    errorTrend: [4, 6, 8, 12, 10, 7, 9, 11, 8, 6],
+    recentErrorLogs: [
+      {
+        id: "ERR-903",
+        timestamp: "2026-07-28 05:20:10",
+        workspaceId: "ws_pharmacy",
+        workspaceName: "El-Gomhouria Modern Pharmacy",
+        errorCode: "400_SAFETY_FILTER",
+        errorMessage: "Candidate was blocked due to SAFETY threshold: MEDICAL_ADVICE_RESTRICTION",
+        latencyMs: 340,
+        promptSnippet: "Is Panadol extra safe during 3rd trimester pregnancy without doctor consent...",
+        model: "gemini-2.5-flash",
+      },
+    ],
+  },
+  {
+    workspaceId: "ws_store",
+    workspaceName: "Urban Wear Retail",
+    industry: "Retail",
+    planId: "starter",
+    activeModel: "gemini-2.5-flash",
+    totalCalls: 310,
+    successfulCalls: 305,
+    errorCalls: 5,
+    errorRatePercent: 1.61,
+    avgLatencyMs: 350,
+    p95LatencyMs: 520,
+    status: "healthy",
+    lastCallTimestamp: "2026-07-28 05:28:30",
+    rpm: 5,
+    tpm: 2100,
+    latencyTrend: [340, 360, 350, 345, 355, 350, 348, 352, 350, 350],
+    errorTrend: [0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+    recentErrorLogs: [],
+  },
+];
+
+
+export const INITIAL_COUPONS = [
+  { id: "c_1", workspaceId: "clinic_1", code: "LASER20", discountType: "percentage", discountValue: 20, condition: "Discount on Laser Services", isActive: true, aiCanUse: true, createdAt: new Date().toISOString() }
+];
