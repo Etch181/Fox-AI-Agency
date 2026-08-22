@@ -5515,16 +5515,108 @@ app.get(
       "getMe"
     );
 
-    const state = workspaceTelegramPollers.get(
-      String(workspace.id)
-    );
+    const tokenValid = !!botInfo?.ok;
+
+    const webhookInfo =
+      tokenValid
+        ? await callWorkspaceTelegramApi(
+            token,
+            "getWebhookInfo"
+          )
+        : null;
+
+    const expectedWebhookUrl =
+      getWorkspaceTelegramWebhookUrl(
+        String(workspace.id)
+      );
+
+    const actualWebhookUrl =
+      String(
+        webhookInfo?.result?.url || ""
+      ).trim();
+
+    const webhookConfigured =
+      !!expectedWebhookUrl &&
+      !!actualWebhookUrl &&
+      actualWebhookUrl === expectedWebhookUrl;
+
+    const pendingUpdates =
+      Number(
+        webhookInfo?.result?.pending_update_count || 0
+      );
+
+    const lastErrorDate =
+      webhookInfo?.result?.last_error_date
+        ? new Date(
+            Number(
+              webhookInfo.result.last_error_date
+            ) * 1000
+          ).toISOString()
+        : null;
+
+    const lastErrorMessage =
+      String(
+        webhookInfo?.result?.last_error_message || ""
+      ).trim() || null;
+
+    const processingReady =
+      tokenValid &&
+      webhookConfigured &&
+      !lastErrorMessage;
+
+    const state =
+      workspaceTelegramPollers.get(
+        String(workspace.id)
+      );
 
     return res.json({
-      connected: !!botInfo?.ok,
-      botInfo: botInfo?.ok ? botInfo.result : undefined,
-      pollingActive: !!state?.running,
-      workspaceId: workspace.id,
-      workspaceName: workspace.name,
+      connected: processingReady,
+
+      tokenValid,
+      webhookConfigured,
+      processingReady,
+
+      botInfo:
+        tokenValid
+          ? botInfo.result
+          : undefined,
+
+      webhook: {
+        expectedUrl:
+          expectedWebhookUrl || null,
+
+        actualUrl:
+          actualWebhookUrl || null,
+
+        pendingUpdates,
+
+        lastErrorDate,
+        lastErrorMessage,
+
+        maxConnections:
+          webhookInfo?.result?.max_connections ??
+          null,
+
+        ipAddress:
+          webhookInfo?.result?.ip_address ??
+          null,
+      },
+
+      mode:
+        webhookConfigured
+          ? "webhook"
+          : state?.running
+            ? "polling"
+            : "disconnected",
+
+      pollingActive:
+        !!state?.running,
+
+      workspaceId:
+        workspace.id,
+
+      workspaceName:
+        workspace.name,
     });
   }
 );
