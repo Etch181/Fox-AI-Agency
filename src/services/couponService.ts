@@ -1,13 +1,32 @@
-import { db, sanitizeForFirestore } from "./firebase";
-import {
-  collection,
-  doc,
-  getDocs,
-  query,
-  runTransaction,
-  setDoc,
-  where,
-} from "firebase/firestore";
+import { adminDb } from "./firebaseAdmin";
+
+function sanitizeForFirestore<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeForFirestore(item))
+      .filter((item) => item !== undefined) as T;
+  }
+
+  if (
+    value !== null &&
+    typeof value === "object"
+  ) {
+    const result: Record<string, any> = {};
+
+    for (const [key, item] of Object.entries(
+      value as Record<string, any>
+    )) {
+      if (item === undefined) continue;
+
+      result[key] =
+        sanitizeForFirestore(item);
+    }
+
+    return result as T;
+  }
+
+  return value;
+}
 
 export interface CouponValidationResult {
   valid: boolean;
@@ -32,15 +51,13 @@ export const couponService = {
       return null;
     }
 
-    const ref = collection(db, "coupons");
-
-    const q = query(
-      ref,
-      where("workspaceId", "==", workspaceId),
-      where("code", "==", normalizedCode)
-    );
-
-    const snapshot = await getDocs(q);
+    const snapshot =
+      await adminDb
+        .collection("coupons")
+        .where("workspaceId", "==", workspaceId)
+        .where("code", "==", normalizedCode)
+        .limit(1)
+        .get();
 
     if (snapshot.empty) {
       return null;
@@ -212,27 +229,26 @@ export const couponService = {
     const coupon: any = validation.coupon;
 
     const couponRef =
-      doc(db, "coupons", coupon.id);
+      adminDb
+        .collection("coupons")
+        .doc(coupon.id);
 
     const redemptionId =
       makeId("red");
 
     const redemptionRef =
-      doc(
-        db,
-        "workspaces",
-        input.workspaceId,
-        "couponRedemptions",
-        redemptionId
-      );
+      adminDb
+        .collection("workspaces")
+        .doc(input.workspaceId)
+        .collection("couponRedemptions")
+        .doc(redemptionId);
 
-    await runTransaction(
-      db,
+    await adminDb.runTransaction(
       async (transaction) => {
         const couponSnapshot =
           await transaction.get(couponRef);
 
-        if (!couponSnapshot.exists()) {
+        if (!couponSnapshot.exists) {
           throw new Error("COUPON_NOT_FOUND");
         }
 
@@ -353,13 +369,11 @@ export const couponService = {
     );
 
     // Global compatibility collection for dashboards/reporting.
-    await setDoc(
-      doc(
-        db,
-        "couponRedemptions",
-        redemptionId
-      ),
-      sanitizeForFirestore({
+    await adminDb
+      .collection("couponRedemptions")
+      .doc(redemptionId)
+      .set(
+        sanitizeForFirestore({
         id: redemptionId,
         workspaceId:
           input.workspaceId,
