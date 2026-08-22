@@ -7248,8 +7248,206 @@ app.post("/api/n8n/webhook", async (req, res) => {
   }
 });
 
+
+// ============================================================
+// FOX RUNTIME READINESS V1
+// ============================================================
+
+type FoxRuntimeCheck = {
+  name: string;
+  ready: boolean;
+  required: boolean;
+  detail?: string;
+};
+
+function getFoxRuntimeChecks(): FoxRuntimeCheck[] {
+  const isProduction =
+    process.env.NODE_ENV === "production";
+
+  const publicBaseUrl =
+    getFoxPublicBaseUrl();
+
+  const hasFirebaseAdmin =
+    Boolean(
+      process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON?.trim() ||
+      process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()
+    );
+
+  const hasFoxSecret =
+    Boolean(
+      process.env.FOX_SECRET_KEY?.trim()
+    );
+
+  const hasAiProvider =
+    Boolean(
+      process.env.OPENROUTER_API_KEY?.trim() ||
+      process.env.GEMINI_API_KEY?.trim()
+    );
+
+  return [
+    {
+      name: "node_environment",
+      ready: true,
+      required: true,
+      detail:
+        process.env.NODE_ENV || "development",
+    },
+    {
+      name: "public_base_url",
+      ready:
+        !isProduction ||
+        Boolean(publicBaseUrl),
+      required:
+        isProduction,
+      detail:
+        publicBaseUrl || "not configured",
+    },
+    {
+      name: "firebase_admin_credentials",
+      ready:
+        hasFirebaseAdmin,
+      required:
+        isProduction,
+      detail:
+        hasFirebaseAdmin
+          ? "configured"
+          : "ADC / service-account configuration not detected",
+    },
+    {
+      name: "fox_secret_key",
+      ready:
+        hasFoxSecret,
+      required:
+        true,
+      detail:
+        hasFoxSecret
+          ? "configured"
+          : "missing",
+    },
+    {
+      name: "ai_provider",
+      ready:
+        hasAiProvider,
+      required:
+        false,
+      detail:
+        hasAiProvider
+          ? "configured"
+          : "fallback mode",
+    },
+  ];
+}
+
+function printFoxRuntimeReadiness() {
+  const checks =
+    getFoxRuntimeChecks();
+
+  console.log("");
+  console.log("🦊 FOX Runtime Readiness");
+
+  for (const check of checks) {
+    const icon =
+      check.ready
+        ? "✅"
+        : check.required
+          ? "❌"
+          : "⚠️";
+
+    console.log(
+      `${icon} ${check.name} | ${check.detail || ""}`
+    );
+  }
+
+  const blocking =
+    checks.filter(
+      (check) =>
+        check.required &&
+        !check.ready
+    );
+
+  if (blocking.length > 0) {
+    console.warn(
+      `⚠️ [FOX Runtime] ${blocking.length} required configuration check(s) are not ready`
+    );
+  }
+
+  return {
+    checks,
+    ready:
+      blocking.length === 0,
+  };
+}
+
+app.get(
+  "/api/health/ready",
+  (_req, res) => {
+    const runtime =
+      getFoxRuntimeChecks();
+
+    const requiredFailures =
+      runtime.filter(
+        (check) =>
+          check.required &&
+          !check.ready
+      );
+
+    const ready =
+      requiredFailures.length === 0;
+
+    return res
+      .status(
+        ready
+          ? 200
+          : 503
+      )
+      .json({
+        service:
+          "FOX AI AGENCY",
+
+        status:
+          ready
+            ? "ready"
+            : "not_ready",
+
+        ready,
+
+        environment:
+          process.env.NODE_ENV ||
+          "development",
+
+        publicBaseUrlConfigured:
+          Boolean(
+            getFoxPublicBaseUrl()
+          ),
+
+        tenantTelegramMode:
+          "webhook",
+
+        checks:
+          runtime,
+      });
+  }
+);
+
 // Vite Middleware for Development / Static serving for Production
 async function startServer() {
+  console.log("");
+  console.log("==============================================");
+  console.log("🦊 FOX AI AGENCY BOOT");
+  console.log("==============================================");
+
+  const runtimeReadiness =
+    printFoxRuntimeReadiness();
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    !runtimeReadiness.ready
+  ) {
+    console.warn(
+      "⚠️ [FOX Boot] Production configuration is incomplete. Service will start for diagnostics, but readiness will remain false."
+    );
+  }
+
   // --------------------------------------------------------
   // Secure Agency Telegram startup
   // --------------------------------------------------------
@@ -7267,8 +7465,13 @@ async function startServer() {
   // --------------------------------------------------------
   await hydrateRegisteredWorkspacesFromFirestore();
 
-  // Start Telegram workers only AFTER Firestore tenants exist.
+  // Configure tenant Telegram webhooks only AFTER
+  // Firestore tenants and encrypted tokens are hydrated.
   await syncWorkspaceTelegramBots();
+
+  console.log(
+    `🌐 [FOX Telegram Runtime] Tenant mode=webhook | PublicBaseURL=${getFoxPublicBaseUrl() || "NOT_CONFIGURED"}`
+  );
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
