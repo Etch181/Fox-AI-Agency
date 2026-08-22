@@ -3592,6 +3592,143 @@ async function handleWorkspaceTelegramUpdate(
   }
 }
 
+
+// ==========================================================
+// FOX PORTABLE TELEGRAM WEBHOOK RUNTIME
+// ==========================================================
+
+function getFoxPublicBaseUrl(): string {
+  const candidates = [
+    process.env.FOX_PUBLIC_BASE_URL,
+    process.env.PUBLIC_BASE_URL,
+    process.env.APP_URL,
+    process.env.RENDER_EXTERNAL_URL,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "")
+      .trim()
+      .replace(/\/+$/, "");
+
+    if (
+      value.startsWith("https://") ||
+      value.startsWith("http://")
+    ) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function getWorkspaceTelegramWebhookUrl(
+  workspaceId: string
+): string {
+  const baseUrl = getFoxPublicBaseUrl();
+
+  if (!baseUrl) {
+    return "";
+  }
+
+  return `${baseUrl}/api/telegram/webhook/${encodeURIComponent(
+    workspaceId
+  )}`;
+}
+
+async function configureWorkspaceTelegramWebhook(
+  workspaceId: string
+) {
+  const workspace = getWorkspaceById(workspaceId);
+
+  if (!workspace) {
+    return {
+      ok: false,
+      code: "WORKSPACE_NOT_FOUND",
+    };
+  }
+
+  const token =
+    await getWorkspaceTelegramRuntimeToken(
+      workspace
+    );
+
+  if (!token) {
+    return {
+      ok: false,
+      code: "TELEGRAM_TOKEN_MISSING",
+    };
+  }
+
+  const webhookUrl =
+    getWorkspaceTelegramWebhookUrl(
+      workspaceId
+    );
+
+  if (!webhookUrl) {
+    console.warn(
+      `⚠️ [Workspace Telegram Webhook] Public URL missing | Workspace=${workspaceId}`
+    );
+
+    return {
+      ok: false,
+      code: "PUBLIC_BASE_URL_MISSING",
+    };
+  }
+
+  const botInfo =
+    await callWorkspaceTelegramApi(
+      token,
+      "getMe"
+    );
+
+  if (!botInfo?.ok) {
+    return {
+      ok: false,
+      code: "INVALID_TELEGRAM_BOT_TOKEN",
+    };
+  }
+
+  // Webhook and getUpdates cannot be used together.
+  await stopWorkspaceTelegramPolling(
+    workspaceId
+  );
+
+  const result =
+    await callWorkspaceTelegramApi(
+      token,
+      "setWebhook",
+      {
+        url: webhookUrl,
+        drop_pending_updates: false,
+        allowed_updates: ["message"],
+      }
+    );
+
+  if (!result?.ok) {
+    console.error(
+      `❌ [Workspace Telegram Webhook] Failed | Workspace=${workspaceId}`,
+      result
+    );
+
+    return {
+      ok: false,
+      code: "TELEGRAM_SET_WEBHOOK_FAILED",
+      telegram: result,
+    };
+  }
+
+  console.log(
+    `🌐 [Workspace Telegram Webhook Connected] ${workspace.name || workspaceId} -> @${botInfo.result?.username || "unknown_bot"} | ${webhookUrl}`
+  );
+
+  return {
+    ok: true,
+    mode: "webhook",
+    webhookUrl,
+    botInfo: botInfo.result,
+  };
+}
+
 async function stopWorkspaceTelegramPolling(workspaceId: string) {
   const state = workspaceTelegramPollers.get(workspaceId);
 
@@ -3725,35 +3862,39 @@ async function startWorkspaceTelegramPolling(workspaceId: string) {
 }
 
 async function syncWorkspaceTelegramBots() {
-  const activeWorkspaceIds = new Set<string>();
-
   for (const workspace of registeredWorkspacesStore) {
     if (!workspace?.id) continue;
 
-    const workspaceId = String(workspace.id);
+    const workspaceId =
+      String(workspace.id);
+
     const token =
-    await getWorkspaceTelegramRuntimeToken(
-      workspace
-    );
+      await getWorkspaceTelegramRuntimeToken(
+        workspace
+      );
 
     if (
       token.length > 10 &&
       workspace.telegramBotStatus !== "disconnected"
     ) {
-      activeWorkspaceIds.add(workspaceId);
-      await startWorkspaceTelegramPolling(workspaceId);
-    } else {
-      await stopWorkspaceTelegramPolling(workspaceId);
-    }
-  }
+      const result =
+        await configureWorkspaceTelegramWebhook(
+          workspaceId
+        );
 
-  // Stop workers for deleted workspaces
-  for (const workspaceId of workspaceTelegramPollers.keys()) {
-    if (!activeWorkspaceIds.has(workspaceId)) {
-      await stopWorkspaceTelegramPolling(workspaceId);
+      if (!result?.ok) {
+        console.warn(
+          `⚠️ [Workspace Telegram Sync] Webhook not active | Workspace=${workspaceId} | Reason=${result?.code || "UNKNOWN"}`
+        );
+      }
+    } else {
+      await stopWorkspaceTelegramPolling(
+        workspaceId
+      );
     }
   }
 }
+
 
 // Workspace-specific webhook endpoint.
 // Useful later for production hosting instead of polling.
@@ -3933,9 +4074,16 @@ app.post(
         updated;
     }
 
-    await startWorkspaceTelegramPolling(
-      workspaceId
-    );
+    const webhookRuntime =
+      await configureWorkspaceTelegramWebhook(
+        workspaceId
+      );
+
+    if (!webhookRuntime?.ok) {
+      console.warn(
+        `⚠️ [Workspace Telegram] Token valid but webhook is not active | Workspace=${workspaceId} | Reason=${webhookRuntime?.code || "UNKNOWN"}`
+      );
+    }
 
     console.log(
       `🔐 [Workspace Telegram] Secure token connected | Workspace=${workspaceId} | Bot=${username || botInfo.result?.id}`
