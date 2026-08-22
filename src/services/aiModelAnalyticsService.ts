@@ -800,7 +800,7 @@ class AiModelAnalyticsService {
 
         const canRecover =
           !wasCooldownActive &&
-          status === "success" &&
+          event.status === "success" &&
           routingRecommendation !==
             "cooldown" &&
           circuitBreakerLevel > 0;
