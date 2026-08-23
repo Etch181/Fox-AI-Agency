@@ -735,6 +735,7 @@ ${industryContext || "Standard business inquiry catalog."}
     const nonBillableFoxSources = new Set([
       "fox_credit_guard",
       "fox_credit_guard_error",
+      "fox_privacy_guard",
       "fox_modify_flow",
       "fox_modify_invalid_selection",
       "fox_modify_parser",
@@ -3459,6 +3460,49 @@ ${industryContext || "Standard business inquiry catalog."}
       ...overrideConfig,
     };
 
+
+    // =========================================================
+    // FOX CUSTOMER PRIVACY GUARD
+    // =========================================================
+    // Never expose another customer's identity or booking data
+    // through public/customer-facing AI channels.
+    // =========================================================
+
+    const normalizedPrivacyMessage =
+      String(message || "")
+        .trim()
+        .toLowerCase();
+
+    const requestsOtherCustomerBookingData =
+      /(?:اسماء|أسماء|اسامي|أسامي|ارقام|أرقام|رقم|موبايل|تليفون|هواتف|مين\s+(?:الناس|الأشخاص|الاشخاص)|مين\s+حاجز|بيانات\s+(?:العملاء|المرضى|المرضي)|customer\s+names?|phone\s+numbers?|who\s+booked|who\s+has\s+booked)/i.test(
+        normalizedPrivacyMessage
+      ) &&
+      /(?:حجز|حاجز|حاجزة|حاجزين|موعد|مواعيد|appointment|booking|booked)/i.test(
+        normalizedPrivacyMessage
+      );
+
+    if (requestsOtherCustomerBookingData) {
+      const privacyReply =
+        messageLang === "ar"
+          ? "حرصًا على الخصوصية، ما ينفعش أشارك أسماء أو أرقام أو بيانات حجوزات عملاء آخرين. أقدر أساعدك بالمواعيد المتاحة، أو أراجع حجوزاتك أنت بعد التحقق من رقم الموبايل."
+          : "For privacy reasons, I can't share other customers' names, phone numbers, or booking details. I can help with available appointment times, or check your own bookings after verifying your phone number.";
+
+      console.warn(
+        `🔒 [FOX Privacy] Customer booking data request blocked | Workspace=${workspace.id}`
+      );
+
+      return {
+        response: privacyReply,
+        aiResponse: privacyReply,
+        detectedLanguage: messageLang,
+        source: "fox_privacy_guard",
+        suggestedActions:
+          messageLang === "ar"
+            ? ["المواعيد المتاحة", "حجوزاتي"]
+            : ["Available Appointments", "My Appointments"]
+      };
+    }
+
     console.log(
       `[Smart Router] ${channel} -> ${agentRole}: ${message.substring(0, 120)}`
     );
@@ -3786,7 +3830,7 @@ DATE SAFETY RULES:
               function: {
                 name: "getAppointmentsForDate",
                 description:
-                  "Read the appointments already booked for a specific date from FOX CRM. This returns booked appointments, not invented availability.",
+                  "Read only the booked time slots for a specific date from FOX CRM. Use these times only to reason about availability. Never reveal customer names, phone numbers, CRM records, appointment owners, or any other customer data.",
                 parameters: {
                   type: "object",
                   properties: {
@@ -3876,7 +3920,7 @@ DATE SAFETY RULES:
           // -----------------------------------------------------
 
           const bookingOperationalIntent =
-            /(?:حجز|احجز|أحجز|موعد|ميعاد|مواعيدي|حجوزاتي|appointment|appointments|book\b|booking|reserve|reservation|my appointments)/i.test(
+            /(?:حجز|احجز|أحجز|موعد|مواعيد|ميعاد|مواعيدي|حجوزاتي|appointment|appointments|availability|available slots|book\b|booking|reserve|reservation|my appointments)/i.test(
               normalizedCurrentMessage
             );
 
@@ -4540,13 +4584,20 @@ DATE SAFETY RULES:
                       `📅 [FOX CRM] Date appointments lookup | Workspace=${workspace.id} | Date=${date} | Count=${appointments.length}`
                     );
 
+                    // PRIVACY BOUNDARY:
+                    // Public availability reasoning receives only
+                    // occupied time values. Never expose appointment
+                    // records or customer-identifying fields to the LLM.
+                    const bookedTimes = appointments
+                      .map((apt: any) => String(apt?.time || "").trim())
+                      .filter(Boolean);
+
                     functionResult = {
                       success: true,
                       date,
-                      bookedSlots: appointments.map((apt: any) => ({
-                        time: apt.time,
-                        status: apt.status
-                      }))
+                      bookedTimes,
+                      count: bookedTimes.length,
+                      privacySafe: true
                     };
                   }
 
