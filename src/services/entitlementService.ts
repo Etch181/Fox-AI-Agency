@@ -1,4 +1,4 @@
-import { IndustryType, PlanId, Workspace } from "../types";
+import type { IndustryType, PlanId, Workspace } from "../types.ts";
 
 export type FoxFeature =
   | "crm"
@@ -115,11 +115,28 @@ export function hasPlanFeature(
   return PLAN_FEATURES[planId]?.includes(feature) ?? false;
 }
 
+export function isWorkspaceEntitlementActive(
+  workspace: Workspace | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (!workspace || workspace.status !== "active") {
+    return false;
+  }
+
+  const expiresAt = workspace.entitlementExpiresAt;
+
+  if (!expiresAt || typeof expiresAt.toMillis !== "function") {
+    return false;
+  }
+
+  return expiresAt.toMillis() > nowMs;
+}
+
 export function hasWorkspaceFeature(
   workspace: Workspace | null | undefined,
   feature: FoxFeature
 ): boolean {
-  if (!workspace) return false;
+  if (!isWorkspaceEntitlementActive(workspace)) return false;
 
   return hasPlanFeature(workspace.planId, feature);
 }
@@ -137,7 +154,7 @@ export function canWorkspaceUseFeature(
   workspace: Workspace | null | undefined,
   feature: FoxFeature
 ): boolean {
-  if (!workspace) return false;
+  if (!isWorkspaceEntitlementActive(workspace)) return false;
 
   /*
    * Channel / subscription features are controlled by the plan.
@@ -156,7 +173,7 @@ export function canWorkspaceUseFeature(
 export function getWorkspaceEntitlements(
   workspace: Workspace | null | undefined
 ) {
-  if (!workspace) {
+  if (!workspace || !isWorkspaceEntitlementActive(workspace)) {
     return {
       planId: null,
       industry: null,

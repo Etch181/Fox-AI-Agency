@@ -191,9 +191,6 @@ export const AdminAuditLogs: React.FC = () => {
         severity: newSeverity,
         target: newTarget.trim(),
         details: newDetails.trim(),
-        actorName: currentUser?.name || "Hesham M. (Super Admin)",
-        actorEmail: currentUser?.email || "info.hesham.m@gmail.com",
-        actorRole: "super_admin",
         ipAddress: "197.38.12.45",
       });
 

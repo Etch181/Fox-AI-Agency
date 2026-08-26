@@ -18,6 +18,7 @@ import {
   GeminiTenantMetrics,
   GeminiErrorLog,
 } from "../types";
+import { Timestamp } from "firebase/firestore";
 
 export const INITIAL_PLANS: SubscriptionPlan[] = [
   {
@@ -130,6 +131,7 @@ export const INITIAL_WORKSPACES: Workspace[] = [
     status: "active",
     planId: "enterprise",
     subscriptionExpiresAt: "2026-08-30",
+    entitlementExpiresAt: Timestamp.fromDate(new Date("2026-08-30T23:59:59Z")),
     aiConversationsUsed: 420,
     creditBalance: 580,
     totalCustomers: 184,
@@ -155,6 +157,7 @@ export const INITIAL_WORKSPACES: Workspace[] = [
     status: "active",
     planId: "business",
     subscriptionExpiresAt: "2026-08-15",
+    entitlementExpiresAt: Timestamp.fromDate(new Date("2026-08-15T23:59:59Z")),
     aiConversationsUsed: 650,
     creditBalance: 350,
     totalCustomers: 310,
@@ -180,6 +183,7 @@ export const INITIAL_WORKSPACES: Workspace[] = [
     status: "active",
     planId: "business",
     subscriptionExpiresAt: "2026-08-20",
+    entitlementExpiresAt: Timestamp.fromDate(new Date("2026-08-20T23:59:59Z")),
     aiConversationsUsed: 310,
     creditBalance: 690,
     totalCustomers: 145,
@@ -205,6 +209,7 @@ export const INITIAL_WORKSPACES: Workspace[] = [
     status: "pending",
     planId: "starter",
     subscriptionExpiresAt: "2026-08-03",
+    entitlementExpiresAt: Timestamp.fromDate(new Date("2026-08-03T23:59:59Z")),
     aiConversationsUsed: 12,
     creditBalance: 88,
     totalCustomers: 28,

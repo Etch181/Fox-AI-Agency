@@ -11,6 +11,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  where,
   updateDoc,
   doc,
 } from "firebase/firestore";
@@ -150,6 +151,7 @@ export const ClientUnifiedInbox: React.FC = () => {
 
     const q = query(
       ref,
+      where("workspaceId", "==", currentWorkspace.id),
       orderBy("lastMessageAt", "desc")
     );
 

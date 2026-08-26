@@ -122,15 +122,15 @@ export const ClientAISettings: React.FC = () => {
   const [marketingAgentPrompt, setMarketingAgentPrompt] = useState(
     currentWorkspace.aiSettings?.marketingAgentPrompt || "جمع التقييمات، إبلاغ العملاء بالعروض الجديدة، وعمل استبيانات."
   );
-  const [externalCrmWebhookUrl, setExternalCrmWebhookUrl] = useState(
-    currentWorkspace.externalCrmWebhookUrl || ""
-  );
   const [strictCatalogOnly, setStrictCatalogOnly] = useState(true);
 
 
 
   const [newFact, setNewFact] = useState("");
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [externalCrmWebhookUrl, setExternalCrmWebhookUrl] = useState("");
+  const [savingExternalCrm, setSavingExternalCrm] = useState(false);
+  const [externalCrmMessage, setExternalCrmMessage] = useState("");
 
   // Inspector & Sandbox State
   const [showPromptInspector, setShowPromptInspector] = useState(false);
@@ -216,13 +216,6 @@ export const ClientAISettings: React.FC = () => {
     if (selectedIndustry !== currentWorkspace.industry) {
       updateWorkspaceField(currentWorkspace.id, { industry: selectedIndustry });
     }
-
-    // Also update the workspace directly for the webhook URL
-    if (externalCrmWebhookUrl !== currentWorkspace.externalCrmWebhookUrl) {
-       updateWorkspaceField(currentWorkspace.id, { externalCrmWebhookUrl });
-    }
-
-
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -339,6 +332,39 @@ export const ClientAISettings: React.FC = () => {
     }
   };
 
+  const saveExternalCrmWebhook = async (disconnect = false) => {
+    setSavingExternalCrm(true);
+    setExternalCrmMessage("");
+    try {
+      const response = await authenticatedFetch(
+        `/api/integrations/workspace/${currentWorkspace.id}/external-crm`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            webhookUrl: disconnect ? "" : externalCrmWebhookUrl,
+          }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || "External CRM update failed");
+      }
+      setExternalCrmWebhookUrl("");
+      setExternalCrmMessage(
+        disconnect
+          ? (isAr ? "تم فصل تكامل CRM الخارجي." : "External CRM disconnected.")
+          : (isAr ? "تم حفظ رابط CRM بأمان." : "External CRM webhook stored securely."),
+      );
+    } catch (error) {
+      setExternalCrmMessage(
+        error instanceof Error ? error.message : "External CRM update failed",
+      );
+    } finally {
+      setSavingExternalCrm(false);
+    }
+  };
+
   return (
     <div className={`space-y-6 animate-fade-in ${isAr ? "dir-rtl" : "dir-ltr"}`}>
       {/* Page Title */}
@@ -377,6 +403,53 @@ export const ClientAISettings: React.FC = () => {
           )}
         </div>
       </div>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-extrabold text-slate-900 dark:text-white">
+              {isAr ? "تكامل CRM الخارجي" : "External CRM Integration"}
+            </h2>
+            <p className="text-xs text-slate-500">
+              {currentWorkspace.externalCrmWebhookConfigured
+                ? (isAr ? "متصل — الرابط السري غير معروض." : "Connected — the secret URL is never displayed.")
+                : (isAr ? "غير متصل" : "Not connected")}
+            </p>
+          </div>
+          <Globe className="h-5 w-5 text-orange-500" />
+        </div>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <input
+            type="url"
+            value={externalCrmWebhookUrl}
+            onChange={(event) => setExternalCrmWebhookUrl(event.target.value)}
+            placeholder="https://crm.example.com/webhook"
+            autoComplete="off"
+            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+          />
+          <button
+            type="button"
+            disabled={savingExternalCrm || !externalCrmWebhookUrl.trim()}
+            onClick={() => void saveExternalCrmWebhook(false)}
+            className="rounded-xl bg-orange-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+          >
+            {isAr ? "حفظ آمن" : "Secure Save"}
+          </button>
+          <button
+            type="button"
+            disabled={savingExternalCrm || !currentWorkspace.externalCrmWebhookConfigured}
+            onClick={() => void saveExternalCrmWebhook(true)}
+            className="rounded-xl border border-rose-300 px-4 py-2 text-xs font-bold text-rose-600 disabled:opacity-50"
+          >
+            {isAr ? "فصل" : "Disconnect"}
+          </button>
+        </div>
+        {externalCrmMessage && (
+          <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+            {externalCrmMessage}
+          </p>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         {/* Main Agent Settings Panel */}

@@ -10,7 +10,8 @@ export type WorkspaceSecretName =
   | "whatsappVerifyToken"
   | "facebookPageAccessToken"
   | "facebookVerifyToken"
-  | "googleSheetsAccessToken";
+  | "googleSheetsAccessToken"
+  | "externalCrmWebhookUrl";
 
 function getSecretRef(
   workspaceId: string,

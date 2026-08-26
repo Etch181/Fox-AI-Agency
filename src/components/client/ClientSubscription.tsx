@@ -247,7 +247,9 @@ export const ClientSubscription: React.FC = () => {
             <p className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-300">
               {isAr ? "صالح حتى:" : "Valid until:"}{" "}
               <span className="font-mono font-bold text-orange-600 dark:text-orange-400">
-                {currentWorkspace.subscriptionExpiresAt}
+                {currentWorkspace.entitlementExpiresAt
+                  ?.toDate?.()
+                  .toLocaleDateString() || "Pending secure sync"}
               </span>
             </p>
           </div>

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
-import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, getDoc, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
 import { db, auth, sanitizeForFirestore } from "../services/firebase";
 import {
   createUserWithEmailAndPassword,
@@ -62,6 +62,8 @@ import {
   INITIAL_GEMINI_METRICS,
 } from "../data/mockData";
 import { authenticatedFetch } from "../services/authenticatedFetch";
+import { createAuditLogId } from "../utils/auditLog";
+import { calculateEntitlementRenewal } from "../utils/entitlementRenewal";
 
 interface ToastMessage {
   id: string;
@@ -124,9 +126,6 @@ interface AppContextType {
     severity?: AuditLogSeverity;
     target: string;
     details: string;
-    actorName?: string;
-    actorEmail?: string;
-    actorRole?: any;
     ipAddress?: string;
     metadata?: Record<string, any>;
   }) => Promise<AuditLog>;
@@ -389,54 +388,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLatestRegistration(null);
   };
 
-  // Real-time Firestore sync for Workspaces
+  // Tenant workspaces use a direct document listener. Super-admin
+  // directories come from the authenticated, secret-free DTO API.
   useEffect(() => {
     if (!currentUser) return;
-    
-    const isSuperAdmin = currentUser?.role === "super_admin";
-    const workspacesRef = collection(db, "workspaces");
-    const q = isSuperAdmin 
-      ? workspacesRef 
-      : query(workspacesRef, where("id", "==", currentUser.workspaceId));
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const fetched = snapshot.docs
-          .map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<Workspace, "id">),
-          }))
-          .filter((w) => !deletedWorkspaceIds.includes(w.id));
+    if (currentUser.role === "super_admin") {
+      let cancelled = false;
 
-        // Firestore is the ONLY source of truth for tenants.
-        // Never preserve demo/local workspaces absent from Firestore.
-        setWorkspaces(fetched);
+      void authenticatedFetch("/api/agency/clients")
+        .then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok || !payload.success) {
+            throw new Error(payload.error || "Workspace directory failed to load");
+          }
 
-        // Optional diagnostic cache only.
-        // This cache is never used to seed workspace state.
-        localStorage.setItem(
-          "fox_workspaces",
-          JSON.stringify(fetched)
-        );
+          if (cancelled) return;
 
-        // Keep Super Admin selection valid.
-        if (currentUser?.role === "super_admin") {
+          const fetched = (Array.isArray(payload.clients)
+            ? payload.clients
+            : []
+          ).map((workspace: any) => ({
+            ...workspace,
+            entitlementExpiresAt:
+              Number.isFinite(workspace.entitlementExpiresAtMillis)
+                ? {
+                    toMillis: () => workspace.entitlementExpiresAtMillis,
+                  }
+                : undefined,
+          })) as Workspace[];
+
+          setWorkspaces(fetched);
           setCurrentWorkspaceIdState((currentId) => {
             if (fetched.length === 0) return "";
-
-            return fetched.some((w) => w.id === currentId)
+            return fetched.some((workspace) => workspace.id === currentId)
               ? currentId
               : fetched[0].id;
           });
-        }
-      },
-      (err) => {
-        console.warn("Firestore workspaces sync notice:", err);
-      }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.warn("Workspace directory sync notice:", error);
+            setWorkspaces([]);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!currentUser.workspaceId) {
+      setWorkspaces([]);
+      return;
+    }
+
+    const workspaceRef = doc(
+      db,
+      "workspaces",
+      currentUser.workspaceId,
     );
-    return () => unsubscribe();
-  }, [currentUser, deletedWorkspaceIds]);
+
+    return onSnapshot(
+      workspaceRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setWorkspaces([]);
+          return;
+        }
+
+        const workspace = {
+          ...(snapshot.data() as Omit<Workspace, "id">),
+          id: snapshot.id,
+        };
+        setWorkspaces([workspace]);
+        localStorage.setItem("fox_workspaces", JSON.stringify([workspace]));
+      },
+      (error) => {
+        console.warn("Firestore workspace sync notice:", error);
+        setWorkspaces([]);
+      },
+    );
+  }, [currentUser]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -462,88 +495,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
-  
-  // Sync Firebase workspaces to Node.js backend so Telegram bot knows about them for anti-fraud
-  useEffect(() => {
-    if (workspaces.length > 0) {
-      fetch("/api/agency/clients", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaces })
-      }).catch(() => {});
-    }
-  }, [workspaces.length]);
 
-  // Sync Telegram Bot Client Registrations & Leads from Agency Server Engine
-  useEffect(() => {
-    const syncTelegramRegistrations = async () => {
-      try {
-        const resClients = await fetch("/api/agency/clients");
-        if (resClients.ok) {
-          const data = await resClients.json();
-          if (data.success && Array.isArray(data.clients) && data.clients.length > 0) {
-            setWorkspaces((prev) => {
-              const cleanPrev = prev.filter((w) => !deletedWorkspaceIds.includes(w.id));
-              const prevMap = new Map<string, Workspace>(cleanPrev.map((w) => [w.id, w]));
-              let hasNew = false;
-              for (const tgClient of data.clients) {
-                if (!prevMap.has(tgClient.id) && !deletedWorkspaceIds.includes(tgClient.id)) {
-                  prevMap.set(tgClient.id, tgClient);
-                  hasNew = true;
-                  triggerRegistrationFeedback({
-                    id: `reg_tg_${tgClient.id}`,
-                    workspaceId: tgClient.id,
-                    workspaceName: tgClient.name,
-                    ownerName: tgClient.ownerName,
-                    ownerEmail: tgClient.ownerEmail,
-                    phone: tgClient.phone,
-                    planId: tgClient.planId,
-                    industry: tgClient.industry,
-                    source: "Telegram Bot",
-                  });
-                }
-              }
-              if (hasNew || cleanPrev.length !== prev.length) {
-                const updated = Array.from(prevMap.values()).filter((w) => !deletedWorkspaceIds.includes(w.id));
-                localStorage.setItem("fox_workspaces", JSON.stringify(updated));
-                return updated;
-              }
-              return prev;
-            });
-          }
-        }
+  // Browser workspace state is hydrated only by the Firestore listeners above.
+  // Runtime server cache refreshes use Admin SDK reads and never browser JSON.
 
-        const resLeads = await fetch("/api/agency/leads");
-        if (resLeads.ok) {
-          const dataLeads = await resLeads.json();
-          if (dataLeads.success && Array.isArray(dataLeads.leads) && dataLeads.leads.length > 0) {
-            setCrmLeads((prev) => {
-              const prevMap = new Map(prev.map((l) => [l.id, l]));
-              let hasNew = false;
-              for (const tgLead of dataLeads.leads) {
-                if (!prevMap.has(tgLead.id)) {
-                  prevMap.set(tgLead.id, tgLead);
-                  hasNew = true;
-                }
-              }
-              if (hasNew) {
-                const updated = Array.from(prevMap.values());
-                localStorage.setItem("fox_leads", JSON.stringify(updated));
-                return updated;
-              }
-              return prev;
-            });
-          }
-        }
-      } catch (err) {
-        // quiet fallback
-      }
-    };
-
-    syncTelegramRegistrations();
-    const interval = setInterval(syncTelegramRegistrations, 4000);
-    return () => clearInterval(interval);
-  }, []);
   // FOX ACTIVATION SECURITY V2
   // Activation code inventory is never loaded from browser storage.
   // Only Super Admin may receive it from the authenticated backend.
@@ -860,10 +815,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       q,
       (snapshot) => {
         if (!snapshot.empty) {
-          const fetchedLogs: AuditLog[] = snapshot.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<AuditLog, "id">),
-          }));
+          const fetchedLogs: AuditLog[] = snapshot.docs.map((d) => {
+            const data = d.data() as Record<string, any>;
+            const storedTimestamp = data.timestamp;
+
+            return {
+              ...data,
+              id: d.id,
+              timestamp:
+                typeof storedTimestamp === "string"
+                  ? storedTimestamp
+                  : storedTimestamp?.toDate?.().toISOString() || "",
+            } as AuditLog;
+          });
           fetchedLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
           setAuditLogs(fetchedLogs);
           localStorage.setItem("fox_audit_logs", JSON.stringify(fetchedLogs));
@@ -886,21 +850,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     severity?: AuditLogSeverity;
     target: string;
     details: string;
-    actorName?: string;
-    actorEmail?: string;
-    actorRole?: any;
     ipAddress?: string;
     metadata?: Record<string, any>;
   }): Promise<AuditLog> => {
+    const actorUid = auth.currentUser?.uid;
+
+    if (!actorUid || !currentUser || currentUser.role !== "super_admin") {
+      throw new Error("AUTH_REQUIRED_FOR_AUDIT_LOG");
+    }
+
     const now = new Date();
     const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
     
     const newLog: AuditLog = {
-      id: `LOG-${Date.now().toString().slice(-6)}`,
+      id: createAuditLogId(),
       timestamp: formattedDate,
-      actorName: entry.actorName || currentUser?.name || "System Admin",
-      actorEmail: entry.actorEmail || currentUser?.email || "system@foxaiagency.com",
-      actorRole: entry.actorRole || currentUser?.role || "system",
+      actorUid,
+      actorName: currentUser.name,
+      actorEmail: currentUser.email,
+      actorRole: "super_admin",
       action: entry.action,
       category: entry.category,
       severity: entry.severity || "info",
@@ -910,13 +878,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       metadata: entry.metadata,
     };
 
-    setAuditLogs((prev) => [newLog, ...prev]);
+    await setDoc(
+      doc(db, "audit_logs", newLog.id),
+      sanitizeForFirestore({
+        ...newLog,
+        timestamp: serverTimestamp(),
+      })
+    );
 
-    try {
-      await setDoc(doc(db, "audit_logs", newLog.id), sanitizeForFirestore(newLog));
-    } catch (err) {
-      console.warn("Firestore save audit log notice:", err);
-    }
+    setAuditLogs((prev) => [newLog, ...prev]);
 
     return newLog;
   };
@@ -1303,6 +1273,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return null;
     }
 
+    // Paid activation must be performed by a trusted server flow.
+    // Browser-created workspaces are restricted to the starter plan
+    // by Firestore Rules so clients cannot self-provision entitlements.
+    if (initialCode?.trim()) {
+      addToast(
+        language === "ar"
+          ? "تفعيل الباقات المدفوعة يتطلب مسار تفعيل آمن من الخادم. يرجى التواصل مع الدعم."
+          : "Paid plan activation requires the secure server activation flow. Please contact support.",
+        "error"
+      );
+
+      return null;
+    }
+
     const newWsId =
       `ws_${Math.random()
         .toString(36)
@@ -1431,6 +1415,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         subscriptionExpiresAt:
           expiry,
 
+        entitlementExpiresAt:
+          Timestamp.fromMillis(
+            Date.now() +
+              30 * 24 * 60 * 60 * 1000
+          ),
+
         aiConversationsUsed: 0,
         totalCustomers: 0,
         totalAppointments: 0,
@@ -1492,43 +1482,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // FIRESTORE
       // -----------------------------------------------------
 
-      await setDoc(
-        doc(
-          db,
-          "workspaces",
-          newWsId
-        ),
-        sanitizeForFirestore(
-          newWorkspace
-        )
+      const registrationBatch = writeBatch(db);
+
+      registrationBatch.set(
+        doc(db, "workspaces", newWsId),
+        sanitizeForFirestore(newWorkspace)
       );
 
-      await setDoc(
-        doc(
-          db,
-          "users",
-          uid
-        ),
-        sanitizeForFirestore(
-          {
-            ...newUser,
-
-            uid,
-
-            workspaceId:
-              newWsId,
-
-            role:
-              "client_owner",
-
-            active:
-              true,
-
-            createdAt:
-              nowIso,
-          }
-        )
+      registrationBatch.set(
+        doc(db, "users", uid),
+        sanitizeForFirestore({
+          ...newUser,
+          uid,
+          workspaceId: newWsId,
+          role: "client_owner",
+          active: true,
+          createdAt: nowIso,
+        })
       );
+
+      await registrationBatch.commit();
 
       // -----------------------------------------------------
       // MARK ACTIVATION CODE USED
@@ -2045,602 +2018,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
 
-  const submitInstapayPayment = (
+  const submitInstapayPayment = async (
     workspaceId: string,
     planId: PlanId,
-    amountEGP: number,
+    _amountEGP: number,
     screenshotUrl: string,
     txRef: string,
-    paymentType: 'plan' | 'extra_package' = 'plan',
-    extraPackageName?: string,
-    extraConversationsCount?: number
+    paymentType: "plan" | "extra_package" = "plan",
+    _extraPackageName?: string,
+    extraConversationsCount?: number,
   ) => {
-    const targetWsId =
-      !isSuperAdmin
-        ? currentWorkspace?.id || workspaceId
-        : workspaceId;
+    const targetWorkspaceId = !isSuperAdmin
+      ? currentWorkspace?.id || workspaceId
+      : workspaceId;
 
-    const ws =
-      workspaces.find(
-        (w) => w.id === targetWsId
-      );
+    try {
+      const response = await authenticatedFetch("/api/payments/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: targetWorkspaceId,
+          planId,
+          paymentType,
+          extraConversationsCount,
+          transactionRef: txRef,
+          screenshotUrl,
+        }),
+      });
+      const payload = await response.json();
 
-    if (!ws) {
-      addToast(
-        language === "ar"
-          ? "تعذر العثور على المنشأة."
-          : "Workspace not found.",
-        "error"
-      );
-      return;
-    }
-
-    const cleanTxRef =
-      String(txRef || "")
-        .trim()
-        .toUpperCase();
-
-    const cleanProof =
-      String(screenshotUrl || "")
-        .trim();
-
-    if (!cleanTxRef) {
-      addToast(
-        language === "ar"
-          ? "الرقم المرجعي للتحويل مطلوب."
-          : "Transaction reference is required.",
-        "error"
-      );
-      return;
-    }
-
-    if (!cleanProof) {
-      addToast(
-        language === "ar"
-          ? "يجب إرفاق إثبات التحويل."
-          : "Payment proof is required.",
-        "error"
-      );
-      return;
-    }
-
-    // Prevent duplicate transaction references.
-    const duplicated =
-      payments.some(
-        (payment) =>
-          String(
-            payment.transactionRef || ""
-          )
-            .trim()
-            .toUpperCase() === cleanTxRef &&
-          payment.status !== "rejected"
-      );
-
-    if (duplicated) {
-      addToast(
-        language === "ar"
-          ? "هذا الرقم المرجعي مستخدم في طلب دفع سابق."
-          : "This transaction reference was already submitted.",
-        "error"
-      );
-      return;
-    }
-
-    let verifiedAmount =
-      Number(amountEGP || 0);
-
-    let pricingSource:
-      "plan_config" |
-      "extra_package" =
-      "extra_package";
-
-    // NEVER trust the amount coming from the client UI
-    // when purchasing a subscription plan.
-    if (paymentType === "plan") {
-      const plan =
-        plans.find(
-          (x) => x.id === planId
-        );
-
-      if (!plan) {
+      if (!response.ok || !payload.success) {
         addToast(
-          language === "ar"
-            ? "الباقة المحددة غير موجودة."
-            : "Selected plan was not found.",
-          "error"
+          payload.error ||
+            (language === "ar"
+              ? "تعذر إرسال طلب الدفع."
+              : "Payment submission failed."),
+          "error",
         );
         return;
       }
 
-      verifiedAmount =
-        Number(
-          plan.priceEGP || 0
-        );
-
-      pricingSource =
-        "plan_config";
-    }
-
-    if (
-      !Number.isFinite(
-        verifiedAmount
-      ) ||
-      verifiedAmount < 0
-    ) {
       addToast(
         language === "ar"
-          ? "قيمة الدفع غير صحيحة."
-          : "Invalid payment amount.",
-        "error"
+          ? "تم إرسال طلب الدفع للمراجعة."
+          : "Payment submitted for review.",
+        "success",
       );
-      return;
-    }
-
-    const paymentId =
-      `pay_${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-
-    const payment: InstapayPayment = {
-      id: paymentId,
-
-      workspaceId:
-        targetWsId,
-
-      workspaceName:
-        ws.name,
-
-      planId,
-      paymentType,
-
-      extraPackageName,
-      extraConversationsCount,
-
-      amountEGP:
-        verifiedAmount,
-
-      screenshotUrl:
-        cleanProof,
-
-      transactionRef:
-        cleanTxRef,
-
-      status:
-        "pending",
-
-      submittedAt:
-        new Date().toISOString(),
-
-      pricingSource,
-
-      paymentMethod:
-        "instapay",
-    };
-
-    setPayments(
-      (prev) => [
-        payment,
-        ...prev.filter(
-          (x) => x.id !== paymentId
-        ),
-      ]
-    );
-
-    setDoc(
-      doc(
-        db,
-        "payments",
-        paymentId
-      ),
-      sanitizeForFirestore(
-        payment
-      )
-    ).catch((error) => {
-      console.error(
-        "❌ [FOX Billing] Payment save failed:",
-        error
-      );
-
-      setPayments(
-        (prev) =>
-          prev.filter(
-            (x) =>
-              x.id !== paymentId
-          )
-      );
-
+    } catch (error) {
+      console.error("[FOX Billing] Authoritative payment submission failed:", error);
       addToast(
         language === "ar"
-          ? "تعذر حفظ طلب الدفع."
-          : "Unable to save payment request.",
-        "error"
+          ? "تعذر إرسال طلب الدفع حالياً."
+          : "Payment submission is currently unavailable.",
+        "error",
       );
-    });
-
-    addToast(
-      language === "ar"
-        ? "تم إرسال إثبات التحويل للمراجعة."
-        : "Payment proof submitted for review.",
-      "success"
-    );
+    }
   };
 
-
-  const approvePayment = (
-    paymentId: string
-  ) => {
-    if (!isSuperAdmin) {
-      addToast(
-        "هذا الإجراء متاح فقط لمدير النظام Super Admin",
-        "error"
-      );
-      return;
-    }
-
-    const payment =
-      payments.find(
-        (x) =>
-          x.id === paymentId
-      );
-
-    if (!payment) {
-      addToast(
-        language === "ar"
-          ? "طلب الدفع غير موجود."
-          : "Payment request not found.",
-        "error"
-      );
-      return;
-    }
-
-    if (
-      payment.status !==
-      "pending"
-    ) {
-      addToast(
-        language === "ar"
-          ? "يمكن اعتماد طلبات الدفع المعلقة فقط."
-          : "Only pending payments can be approved.",
-        "error"
-      );
-      return;
-    }
-
-    const ws =
-      workspaces.find(
-        (x) =>
-          x.id ===
-          payment.workspaceId
-      );
-
-    if (!ws) {
-      addToast(
-        language === "ar"
-          ? "المنشأة المرتبطة بالدفع غير موجودة."
-          : "Workspace linked to this payment was not found.",
-        "error"
-      );
-      return;
-    }
-
-    const now =
-      new Date();
-
-    const nowIso =
-      now.toISOString();
-
-    let newExpiry:
-      string | undefined =
-      undefined;
-
-    // =====================================================
-    // MAIN PLAN PAYMENT
-    // =====================================================
-
-    if (
-      payment.paymentType !==
-      "extra_package"
-    ) {
-      const selectedPlan =
-        plans.find(
-          (x) =>
-            x.id ===
-            payment.planId
-        );
-
-      if (!selectedPlan) {
-        addToast(
-          language === "ar"
-            ? "الباقة لم تعد موجودة."
-            : "Subscription plan no longer exists.",
-          "error"
-        );
-        return;
-      }
-
-      const expectedAmount =
-        Number(
-          selectedPlan.priceEGP || 0
-        );
-
-      if (
-        Number(
-          payment.amountEGP
-        ) !== expectedAmount
-      ) {
-        addToast(
-          language === "ar"
-            ? `قيمة الدفع لا تطابق سعر الباقة الحالي: ${expectedAmount} ج.م`
-            : `Payment does not match current plan price: ${expectedAmount} EGP`,
-          "error"
-        );
-        return;
-      }
-
-      // Renewal:
-      // If subscription is still active,
-      // extend 30 days from current expiry.
-      // Otherwise start 30 days from today.
-      const existingExpiry =
-        ws.subscriptionExpiresAt
-          ? new Date(
-              `${ws.subscriptionExpiresAt}T23:59:59`
-            )
-          : null;
-
-      const base =
-        existingExpiry &&
-        Number.isFinite(
-          existingExpiry.getTime()
-        ) &&
-        existingExpiry > now
-          ? existingExpiry
-          : now;
-
-      const expiry =
-        new Date(
-          base.getTime() +
-            30 *
-              24 *
-              60 *
-              60 *
-              1000
-        );
-
-      newExpiry =
-        expiry
-          .toISOString()
-          .split("T")[0];
-
-      const updates:
-        Partial<Workspace> = {
-        planId:
-          payment.planId,
-
-        status:
-          "active",
-
-        subscriptionExpiresAt:
-          newExpiry,
-
-        // New monthly cycle.
-        aiConversationsUsed:
-          0,
-      };
-
-      setWorkspaces(
-        (prev) =>
-          prev.map(
-            (item) =>
-              item.id === ws.id
-                ? {
-                    ...item,
-                    ...updates,
-                  }
-                : item
-          )
-      );
-
-      setDoc(
-        doc(
-          db,
-          "workspaces",
-          ws.id
-        ),
-        sanitizeForFirestore(
-          updates
-        ),
-        {
-          merge: true,
-        }
-      ).catch((error) =>
-        console.error(
-          "❌ [FOX Billing] Subscription activation failed:",
-          error
-        )
-      );
-
-    } else {
-      // ===================================================
-      // EXTRA CONVERSATION PACKAGE
-      // ===================================================
-
-      const conversations =
-        Math.max(
-          0,
-          Number(
-            payment.extraConversationsCount ||
-            0
-          )
-        );
-
-      if (
-        conversations <= 0
-      ) {
-        addToast(
-          language === "ar"
-            ? "عدد المحادثات الإضافية غير صحيح."
-            : "Invalid extra conversation amount.",
-          "error"
-        );
-        return;
-      }
-
-      const pkg: ExtraPackage = {
-        id:
-          `pkg_${Date.now()}_${Math.random()
-            .toString(36)
-            .slice(2, 7)}`,
-
-        name:
-          payment.extraPackageName ||
-          `+${conversations} conversations`,
-
-        conversationsAdded:
-          conversations,
-
-        priceEGP:
-          Number(
-            payment.amountEGP || 0
-          ),
-
-        addedAt:
-          nowIso,
-      };
-
-      const updates:
-        Partial<Workspace> = {
-        extraConversationsLimit:
-          Number(
-            ws.extraConversationsLimit ||
-            0
-          ) +
-          conversations,
-
-        extraPackages: [
-          ...(ws.extraPackages || []),
-          pkg,
-        ],
-      };
-
-      setWorkspaces(
-        (prev) =>
-          prev.map(
-            (item) =>
-              item.id === ws.id
-                ? {
-                    ...item,
-                    ...updates,
-                  }
-                : item
-          )
-      );
-
-      setDoc(
-        doc(
-          db,
-          "workspaces",
-          ws.id
-        ),
-        sanitizeForFirestore(
-          updates
-        ),
-        {
-          merge: true,
-        }
-      ).catch((error) =>
-        console.error(
-          "❌ [FOX Billing] Extra package activation failed:",
-          error
-        )
-      );
-    }
-
-    const generatedCode =
-      payment.generatedCode ||
-      (
-        payment.paymentType ===
-        "extra_package"
-          ? `FOX-EXTRA-PAID-${Date.now()
-              .toString()
-              .slice(-6)}`
-          : `FOX-PAID-${String(
-              payment.planId
-            ).toUpperCase()}-${Date.now()
-              .toString()
-              .slice(-6)}`
-      );
-
-    const paymentUpdate:
-      Partial<InstapayPayment> = {
-      status:
-        "approved",
-
-      approvedAt:
-        nowIso,
-
-      approvedBy:
-        currentUser?.email ||
-        "super_admin",
-
-      activatedAt:
-        nowIso,
-
-      generatedCode,
-
-      subscriptionExpiresAt:
-        newExpiry,
-    };
-
-    setPayments(
-      (prev) =>
-        prev.map(
-          (item) =>
-            item.id === paymentId
-              ? {
-                  ...item,
-                  ...paymentUpdate,
-                }
-              : item
-        )
-    );
-
-    setDoc(
-      doc(
-        db,
-        "payments",
-        paymentId
-      ),
-      sanitizeForFirestore(
-        paymentUpdate
-      ),
-      {
-        merge: true,
-      }
-    ).catch((error) =>
-      console.error(
-        "❌ [FOX Billing] Payment approval save failed:",
-        error
-      )
-    );
-
-    addToast(
-      payment.paymentType ===
-      "extra_package"
-        ? language === "ar"
-          ? "✅ تم اعتماد الدفع وإضافة المحادثات."
-          : "✅ Payment approved and conversations added."
-        : language === "ar"
-        ? `✅ تم اعتماد الدفع وتفعيل الباقة حتى ${newExpiry}.`
-        : `✅ Payment approved. Subscription active until ${newExpiry}.`,
-      "success"
-    );
-  };
-
-
-  const rejectPayment = (
+  const transitionPaymentViaServer = async (
     paymentId: string,
-    reason: string
+    action: "approve" | "reject",
+    reason?: string
   ) => {
     if (!isSuperAdmin) {
       addToast(
@@ -2650,120 +2088,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const payment =
-      payments.find(
-        (x) =>
-          x.id === paymentId
+    try {
+      const response = await authenticatedFetch(
+        `/api/admin/payments/${encodeURIComponent(paymentId)}/transition`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, reason }),
+        }
       );
+      const result = await response.json();
 
-    if (!payment) {
-      return;
-    }
-
-    if (
-      payment.status !==
-      "pending"
-    ) {
-      addToast(
-        language === "ar"
-          ? "يمكن رفض الطلبات المعلقة فقط."
-          : "Only pending payments can be rejected.",
-        "error"
-      );
-      return;
-    }
-
-    const cleanReason =
-      String(reason || "")
-        .trim();
-
-    if (!cleanReason) {
-      addToast(
-        language === "ar"
-          ? "اكتب سبب الرفض."
-          : "Enter a rejection reason.",
-        "error"
-      );
-      return;
-    }
-
-    const updates:
-      Partial<InstapayPayment> = {
-      status:
-        "rejected",
-
-      rejectionReason:
-        cleanReason,
-
-      rejectedAt:
-        new Date().toISOString(),
-
-      rejectedBy:
-        currentUser?.email ||
-        "super_admin",
-    };
-
-    setPayments(
-      (prev) =>
-        prev.map(
-          (item) =>
-            item.id === paymentId
-              ? {
-                  ...item,
-                  ...updates,
-                }
-              : item
-        )
-    );
-
-    setDoc(
-      doc(
-        db,
-        "payments",
-        paymentId
-      ),
-      sanitizeForFirestore(
-        updates
-      ),
-      {
-        merge: true,
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result.error || "Authoritative payment transition failed"
+        );
       }
-    ).catch((error) =>
-      console.error(
-        "❌ [FOX Billing] Rejection save failed:",
-        error
-      )
-    );
 
+      addToast(
+        action === "approve"
+          ? language === "ar"
+            ? "✅ تم اعتماد الدفع من المصدر الموثوق."
+            : "✅ Payment approved by the authoritative server."
+          : language === "ar"
+            ? "✅ تم رفض طلب الدفع من المصدر الموثوق."
+            : "✅ Payment rejected by the authoritative server.",
+        "success"
+      );
+    } catch (error) {
+      addToast(
+        error instanceof Error
+          ? error.message
+          : "Payment transition failed",
+        "error"
+      );
+    }
+  };
+
+  const approvePayment = (paymentId: string) => {
+    void transitionPaymentViaServer(paymentId, "approve");
+  };
+
+  const rejectPayment = (paymentId: string, reason: string) => {
+    void transitionPaymentViaServer(paymentId, "reject", reason);
+  };
+
+
+  const updateWorkspaceStatus = async (
+    workspaceId: string,
+    status: "active" | "pending" | "suspended",
+  ) => {
+    if (!isSuperAdmin) {
+      addToast("هذا الإجراء متاح فقط لمدير النظام Super Admin", "error");
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(
+        `/api/admin/workspaces/${workspaceId}/operational`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || "Workspace update failed");
+      }
+      setWorkspaces((previous) =>
+        previous.map((workspace) =>
+          workspace.id === workspaceId
+            ? { ...workspace, ...payload.workspace, status }
+            : workspace,
+        ),
+      );
+      addToast(`Workspace status updated to ${status}`, "success");
+    } catch (error) {
+      console.error("Workspace status update failed:", error);
+      addToast("Workspace status was not changed", "error");
+    }
+  };
+
+  const updateWorkspacePlan = (_workspaceId: string, _planId: PlanId) => {
     addToast(
-      language === "ar"
-        ? "تم رفض طلب الدفع وتسجيل السبب."
-        : "Payment rejected and reason recorded.",
-      "info"
+      "Plan changes require an approved payment or activation-code transaction.",
+      "error",
     );
   };
 
-
-  const updateWorkspaceStatus = (workspaceId: string, status: "active" | "pending" | "suspended") => {
-    if (!isSuperAdmin) {
-      addToast("هذا الإجراء متاح فقط لمدير النظام Super Admin", "error");
-      return;
-    }
-    setWorkspaces((prev) => prev.map((w) => (w.id === workspaceId ? { ...w, status } : w)));
-    addToast(`Workspace status updated to ${status}`, "info");
-  };
-
-  const updateWorkspacePlan = (workspaceId: string, planId: PlanId) => {
-    if (!isSuperAdmin) {
-      addToast("هذا الإجراء متاح فقط لمدير النظام Super Admin", "error");
-      return;
-    }
-    setWorkspaces((prev) => prev.map((w) => (w.id === workspaceId ? { ...w, planId } : w)));
-    addToast(`Workspace upgraded/downgraded to ${planId}`, "success");
-  };
-
-  const updateWorkspaceField = (workspaceId: string, updates: Partial<Workspace>) => {
-    setWorkspaces((prev) => prev.map((w) => (w.id === workspaceId ? { ...w, ...updates } : w)));
+  const updateWorkspaceField = (
+    _workspaceId: string,
+    _updates: Partial<Workspace>,
+  ) => {
+    addToast(
+      "Direct billing, counter, and package changes are disabled. Use an authoritative workflow.",
+      "error",
+    );
   };
 
   const deleteWorkspace = async (workspaceId: string) => {
@@ -2772,43 +2193,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Blacklist workspace ID locally to prevent background auto-resync
-    setDeletedWorkspaceIds((prev) => {
-      const updated = Array.from(new Set([...prev, workspaceId]));
-      localStorage.setItem("fox_deleted_workspaces", JSON.stringify(updated));
-      return updated;
-    });
-
-    // Remove from workspaces state and local storage
-    setWorkspaces((prev) => {
-      const updated = prev.filter((w) => w.id !== workspaceId);
-      localStorage.setItem("fox_workspaces", JSON.stringify(updated));
-      return updated;
-    });
-
-    // Dismiss latest registration toast if it matches this workspace
-    setLatestRegistration((prev) => (prev?.workspaceId === workspaceId ? null : prev));
-
-    // Delete from persistent Firestore database
     try {
-      await deleteDoc(doc(db, "workspaces", workspaceId));
-    } catch (err) {
-      console.warn("Firestore delete workspace notice:", err);
-    }
+      const response = await authenticatedFetch(
+        `/api/admin/workspaces/${workspaceId}`,
+        { method: "DELETE" },
+      );
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || "Workspace access revocation failed");
+      }
 
-    // Delete from Node.js agency backend store
-    try {
-      await fetch(`/api/agency/clients/${workspaceId}`, { method: "DELETE" });
-    } catch (err) {
-      console.warn("Backend client deletion notice:", err);
+      setWorkspaces((previous) =>
+        previous.filter((workspace) => workspace.id !== workspaceId),
+      );
+      setLatestRegistration((previous) =>
+        previous?.workspaceId === workspaceId ? null : previous,
+      );
+      addToast(
+        language === "ar"
+          ? "تم إيقاف الوصول للمنشأة مع الاحتفاظ بالبيانات وفق سياسة الحذف."
+          : "Workspace access revoked; data retained under the deletion policy.",
+        "success",
+      );
+    } catch (error) {
+      console.error("Workspace access revocation failed:", error);
+      addToast(
+        language === "ar"
+          ? "تعذر إيقاف الوصول للمنشأة. لم يتم تغيير الحالة."
+          : "Workspace access was not changed.",
+        "error",
+      );
     }
-
-    addToast(
-      language === "ar"
-        ? "تم حذف المشترك نهائياً وإزالته من قاعدة البيانات ولن يظهر مجدداً"
-        : "Workspace permanently deleted from database",
-      "info"
-    );
   };
 
   // CRM & Industry actions with strict tenant boundary checks
@@ -3572,7 +2987,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const fetchModificationRequests = async () => {
     try {
-      const res = await fetch("/api/agency/modification-requests");
+      const res = await authenticatedFetch("/api/agency/modification-requests");
       if (!res.ok) return;
       const data = await res.json();
       if (data && data.success && Array.isArray(data.requests)) {
@@ -3591,7 +3006,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createSubscriberModificationRequest = async (workspaceId: string, proposedData: any, adminNotes?: string) => {
     try {
-      const res = await fetch("/api/agency/modification-requests", {
+      const res = await authenticatedFetch("/api/agency/modification-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId, proposedData, adminNotes }),
@@ -3613,7 +3028,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const confirmModificationByClient = async (requestId: string) => {
     try {
-      const res = await fetch(`/api/agency/modification-requests/${requestId}/confirm-by-client`, {
+      const res = await authenticatedFetch(`/api/agency/modification-requests/${requestId}/confirm-by-client`, {
         method: "POST",
       });
       const data = await res.json();
@@ -3630,7 +3045,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const approveSubscriberModificationRequest = async (requestId: string, adminNotes?: string) => {
     try {
-      const res = await fetch(`/api/agency/modification-requests/${requestId}/approve`, {
+      const res = await authenticatedFetch(`/api/agency/modification-requests/${requestId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminNotes }),
@@ -3656,7 +3071,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const rejectSubscriberModificationRequest = async (requestId: string, adminNotes?: string) => {
     try {
-      const res = await fetch(`/api/agency/modification-requests/${requestId}/reject`, {
+      const res = await authenticatedFetch(`/api/agency/modification-requests/${requestId}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminNotes }),

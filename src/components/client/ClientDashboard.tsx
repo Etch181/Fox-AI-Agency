@@ -899,8 +899,8 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 {isAr
-                  ? `ينتهي الاشتراك في: ${new Date(currentWorkspace.subscriptionExpiresAt).toLocaleDateString("ar-EG")}`
-                  : `Valid through: ${new Date(currentWorkspace.subscriptionExpiresAt).toLocaleDateString()}`}
+                  ? `ينتهي الاشتراك في: ${currentWorkspace.entitlementExpiresAt?.toDate?.().toLocaleDateString("ar-EG") || "بانتظار المزامنة الآمنة"}`
+                  : `Valid through: ${currentWorkspace.entitlementExpiresAt?.toDate?.().toLocaleDateString() || "Pending secure sync"}`}
               </p>
             </div>
           </div>

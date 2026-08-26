@@ -3,3 +3,6 @@ node_modules/
 dist/
 .env
 firebase-admin-key.json
+firestore-debug.log
+firebase-debug.log
+.firebase/

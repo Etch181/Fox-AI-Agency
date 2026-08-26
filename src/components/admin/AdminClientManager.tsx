@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { PlanId, ExtraPackage } from "../../types";
 import { completeRegistration } from "../../utils/registrationFlow";
+import { Timestamp } from "firebase/firestore";
 import {
   Search,
   Building2,
@@ -94,6 +95,9 @@ export const AdminClientManager: React.FC = () => {
             status: newWsStatus,
             planId: newWsPlanId,
             subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            entitlementExpiresAt: Timestamp.fromMillis(
+              Date.now() + 30 * 24 * 60 * 60 * 1000
+            ),
           };
 
           if (newWsInitialExtraConvs > 0) {
@@ -631,7 +635,9 @@ export const AdminClientManager: React.FC = () => {
                   </td>
 
                   <td className="py-3.5 px-4 font-mono text-slate-600 dark:text-slate-300">
-                    {ws.subscriptionExpiresAt}
+                    {ws.entitlementExpiresAt
+                      ?.toDate?.()
+                      .toLocaleDateString() || "Pending secure sync"}
                   </td>
 
                   <td className="py-3.5 px-4 text-right">

@@ -195,14 +195,12 @@ export const AdminGeminiMonitoring: React.FC = () => {
     setIsPingingAll(false);
     addToast(isAr ? "اكتمل الفحص التشخيصي الشامل بنجاح!" : "All tenant diagnostic pings completed!", "success");
 
-    addAuditLog({
+    await addAuditLog({
       action: "Gemini API Diagnostic Sweep Executed",
       category: "api",
       severity: "info",
       target: "Gemini AI API Engine",
       details: "Triggered diagnostic health and latency ping across all workspace tenants.",
-      actorName: currentUser?.name || "System Super Admin",
-      actorEmail: currentUser?.email || "info.hesham.m@gmail.com",
     });
   };
 

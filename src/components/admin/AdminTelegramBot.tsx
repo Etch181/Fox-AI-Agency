@@ -346,7 +346,7 @@ export const AdminTelegramBot: React.FC = () => {
     setChatLog((prev) => [...prev, { sender: "user", text: input }]);
 
     try {
-      const res = await fetch("/api/telegram/bot", {
+      const res = await authenticatedFetch("/api/telegram/bot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input }),

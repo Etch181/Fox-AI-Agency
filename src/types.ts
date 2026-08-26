@@ -1,3 +1,5 @@
+import type { Timestamp } from "firebase/firestore";
+
 export type UserRole = 'super_admin' | 'client_owner' | 'staff';
 
 export interface User {
@@ -45,6 +47,7 @@ export interface Workspace {
   status: 'active' | 'pending' | 'suspended';
   planId: PlanId;
   subscriptionExpiresAt: string;
+  entitlementExpiresAt?: Timestamp;
   aiConversationsUsed: number;
   extraConversationsLimit?: number;
   extraPackages?: ExtraPackage[];
@@ -54,7 +57,6 @@ export interface Workspace {
   totalComplaints: number;
   createdAt: string;
   aiSettings?: AISettings;
-  telegramBotToken?: string;
   telegramBotName?: string;
   telegramBotStatus?: 'connected' | 'disconnected' | 'pending';
   whatsappBotStatus?: 'connected' | 'disconnected' | 'pending';
@@ -74,9 +76,10 @@ export interface Workspace {
   onboardingAiReady?: boolean;
   onboardingCatalogReady?: boolean;
 
-  googleSheetsAccessToken?: string;
   crmSpreadsheetId?: string;
-  externalCrmWebhookUrl?: string;
+  googleSheetsConnectedAt?: string;
+  externalCrmWebhookConfigured?: boolean;
+  externalCrmWebhookUpdatedAt?: string;
 }
 
 export interface RegistrationConfirmation {
@@ -402,6 +405,7 @@ export type AuditLogSeverity = 'info' | 'warning' | 'critical';
 export interface AuditLog {
   id: string;
   timestamp: string;
+  actorUid?: string;
   actorName: string;
   actorEmail: string;
   actorRole: UserRole | 'system';

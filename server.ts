@@ -3,7 +3,7 @@ import {
   getWorkspaceSecret,
   deleteWorkspaceSecret,
 } from "./src/services/workspaceSecretVault";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   canWorkspaceUseFeature,
   FoxFeature,
@@ -19,10 +19,12 @@ import {
   decryptSecret,
 } from "./src/services/secretService";
 import {
+  createHash,
   randomBytes,
   scryptSync,
   timingSafeEqual,
 } from "crypto";
+import "express-async-errors";
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
@@ -33,6 +35,26 @@ import { sharedMemoryService } from "./src/services/sharedMemoryService";
 import { conversationService } from "./src/services/conversationService";
 import { workspaceCrmService } from "./src/services/workspaceCrmService";
 import { crmEventService } from "./src/services/crmEventService";
+import { validateExternalCrmWebhookUrl } from "./src/services/crmService";
+import { calculateEntitlementRenewal } from "./src/utils/entitlementRenewal";
+import { secureAsyncRoute } from "./src/utils/secureAsyncRoute";
+import {
+  authoritativeWorkspaceFromDocument,
+  authoritativeWorkspaceToAdminDto,
+  authoritativeWorkspaceToClientDto,
+  refreshAuthoritativeWorkspaceCache,
+  sanitizeAuthoritativeWorkspaceForRuntime,
+} from "./src/services/workspaceTrust";
+import { migrateLegacyWorkspaceSecrets } from "./src/services/legacyWorkspaceSecretMigration";
+import { migrateLegacyWorkspaceEntitlement } from "./src/services/legacyEntitlementMigration";
+import {
+  PaymentTransitionError,
+  transitionPayment,
+} from "./src/services/paymentTransitionService";
+import {
+  PaymentSubmissionError,
+  submitPayment,
+} from "./src/services/paymentSubmissionService";
 import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
 dotenv.config();
@@ -245,13 +267,12 @@ app.post("/api/send-otp", async (req, res) => {
     return res.json({
       success: true,
       message: `تم إرسال كود التفعيل إلى البريد: ${cleanEmail}`,
-      otpCode, // also returned for testing/fallback
       deliveryMode: mailResult.mode,
       previewUrl: mailResult.previewUrl,
     });
   } catch (err: any) {
     console.error("Send OTP Endpoint Error:", err);
-    return res.status(500).json({ error: err.message || "Failed to send verification email" });
+    return res.status(500).json({ error: "Failed to send verification email" });
   }
 });
 
@@ -975,38 +996,36 @@ app.post("/api/ai/build-system-prompt", (req, res) => {
     const prompt = aiAgentService.buildSystemInstruction(workspace, messageLang, channel, overrideConfig);
     return res.json({ systemInstruction: prompt });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || "Failed to build system prompt" });
+    console.error("Build System Prompt Error:", err);
+    return res.status(500).json({ error: "Failed to build system prompt" });
   }
 });
 
 // Centralized AI Agent Chat Endpoint
 
-app.post("/api/ai/reset-session", async (req, res) => {
-  try {
+app.post(
+  "/api/ai/reset-session",
+  secureAsyncRoute("AI session reset", async (req, res) => {
     const { workspaceId, sessionId } = req.body;
     if (workspaceId && sessionId) {
       await sharedMemoryService.resetContext(workspaceId, sessionId);
     }
     res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to reset session" });
-  }
-});
+  })
+);
 
 
-app.post("/api/ai/extract-knowledge", async (req, res) => {
-  try {
+app.post(
+  "/api/ai/extract-knowledge",
+  secureAsyncRoute("AI extract knowledge", async (req, res) => {
     const { type, content, url, mimeType } = req.body;
     if (!type) {
       return res.status(400).json({ error: "Type is required" });
     }
     const result = await aiAgentService.extractKnowledge({ type, content, url, mimeType });
     res.json(result);
-  } catch (error) {
-    console.error("Extract Knowledge Error:", error);
-    res.status(500).json({ error: error.message || "Failed to extract knowledge" });
-  }
-});
+  })
+);
 
 
 
@@ -1093,7 +1112,10 @@ app.post(
 
     const result =
       await aiAgentService.generateChatResponse({
-        workspace: trustedWorkspace,
+        workspace:
+          await withWorkspaceRuntimeIntegrations(
+            trustedWorkspace
+          ),
         message,
         channel,
         chatHistory,
@@ -1110,9 +1132,7 @@ app.post(
     );
 
     return res.status(500).json({
-      error:
-        error.message ||
-        "Failed to process AI response"
+      error: "Failed to process AI response"
     });
   }
   }
@@ -1185,7 +1205,7 @@ Be professional, analytical, and friendly. Provide actionable advice. You can us
     return res.json({ response: response.text || "No response generated." });
   } catch (error: any) {
     console.error("Fox Advisor Route Error:", error);
-    return res.status(500).json({ error: error.message || "Failed to process Fox Advisor response" });
+    return res.status(500).json({ error: "Failed to process Fox Advisor response" });
   }
 });
 
@@ -1353,10 +1373,7 @@ async function hydrateRegisteredWorkspacesFromFirestore() {
       .map((docSnap) => {
         const data = docSnap.data() as any;
 
-        return {
-          ...data,
-          id: data?.id || docSnap.id,
-        };
+        return authoritativeWorkspaceFromDocument(docSnap.id, data || {});
       })
       .filter((workspace) => {
         return (
@@ -1602,13 +1619,15 @@ function finalizeModificationRequestSubmission(chatId: string, session: any): st
   return `🎉 *تم إرسال طلب تعديل بيانات منشأتك بنجاح إلى صاحب الوكالة (Super Admin)!* 🦊🤖\n\n📌 **البيانات المقترحة والمرفوعة للاعتماد**:\n• **اسم النشاط**: ${newReq.proposedData.name}\n• **نوع النشاط واللوحة**: ${indAr}\n• **اسم المالك**: ${newReq.proposedData.ownerName}\n• **رقم الهاتف**: ${newReq.proposedData.phone}\n• **البريد الإلكتروني**: \`${newReq.proposedData.email}\`\n• **الباقة**: ${newReq.proposedData.planId?.toUpperCase() || "BUSINESS"}\n\n📩 *تم تحويل الطلب الآن إلى لوحة تحكّم صاحب الوكالة (Super Admin) للموافقة والاعتماد النهائي.*\nستتلقى إشعاراً فورياً هنا عند موافقة صاحب الوكالة رسمياً! 🦊✨`;
 }
 
-function finalizeTelegramRegistration(chatId: string, session: any, userInfo?: any) {
+async function finalizeTelegramRegistration(chatId: string, session: any, userInfo?: any) {
   const wsId = `ws_tg_${Date.now().toString().slice(-6)}`;
   const leadId = `lead_tg_${Date.now().toString().slice(-6)}`;
   const nowStr = new Date().toISOString().split("T")[0];
 
-  const planId: "starter" | "business" | "enterprise" = session.selectedPlan || "business";
-  const planName = planId === "enterprise" ? "Fox Enterprise (2000 EGP)" : planId === "starter" ? "Fox Starter (Free Trial)" : "Fox Business (1000 EGP)";
+  // Direct bot registration is untrusted for billing; paid plans require
+  // the authoritative payment transaction endpoint.
+  const planId: "starter" = "starter";
+  const planName = "Fox Starter (Free Trial)";
 
   // Register trial consumption for single-use trial enforcement
   if (planId === "starter") {
@@ -1645,6 +1664,9 @@ function finalizeTelegramRegistration(chatId: string, session: any, userInfo?: a
     isVerified: true,
     activationCode: session.otpCode || "VERIFIED",
     subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    entitlementExpiresAt: Timestamp.fromMillis(
+      Date.now() + 30 * 24 * 60 * 60 * 1000
+    ),
     aiConversationsUsed: 1,
     totalCustomers: 1,
     totalAppointments: 0,
@@ -1674,8 +1696,26 @@ function finalizeTelegramRegistration(chatId: string, session: any, userInfo?: a
     source: "Telegram Bot",
   };
 
-  // Add to top of stores
-  registeredWorkspacesStore = [newWorkspace, ...registeredWorkspacesStore.filter(w => w.id !== wsId)];
+  await adminDb.runTransaction(async (transaction) => {
+    const workspaceRef = adminDb.collection("workspaces").doc(wsId);
+    const existing = await transaction.get(workspaceRef);
+
+    if (existing.exists) {
+      throw new Error("WORKSPACE_ALREADY_EXISTS");
+    }
+
+    transaction.create(workspaceRef, newWorkspace);
+    transaction.create(
+      workspaceRef.collection("crmLeads").doc(leadId),
+      newLead
+    );
+  });
+
+  // Cache only the trusted transaction result and strip secret fields.
+  registeredWorkspacesStore = [
+    sanitizeAuthoritativeWorkspaceForRuntime(newWorkspace),
+    ...registeredWorkspacesStore.filter(w => w.id !== wsId),
+  ];
   registeredLeadsStore = [newLead, ...registeredLeadsStore.filter(l => l.id !== leadId)];
 
   // Set session step to AWAITING_RATING so the client's next response is recorded as rating
@@ -2168,7 +2208,7 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
         console.error(`[Telegram Bot] Verification email failed:`, err);
       });
 
-    return `📧 *تم إرسال كود التفعيل إلى بريدك الإلكتروني!* 📩\n\nتم إرسال رمز التحقق والتفعيل المكون من 6 أرقام عبر البريد الإلكتروني إلى: \`${session.email}\`\n\n🔐 **كود التفعيل (رمز الأمان)**: \`${otpCode}\`\n\n📌 *الخطوة الأخيرة (4 من 4 - تأكيد البريد وتفعيل الحساب)*:\nبرجاء كتابة كود التفعيل المكون من 6 أرقام الآن لتأكيد تفعيل الحساب فوراً:`;
+    return `📧 *تم إرسال كود التفعيل إلى بريدك الإلكتروني!* 📩\n\nتم إرسال رمز التحقق والتفعيل المكون من 6 أرقام عبر البريد الإلكتروني إلى: \`${session.email}\`\n\n📌 *الخطوة الأخيرة (4 من 4 - تأكيد البريد وتفعيل الحساب)*:\nبرجاء كتابة كود التفعيل المكون من 6 أرقام الآن لتأكيد تفعيل الحساب فوراً:`;
   }
 
   // STEP 4: AWAITING_OTP VERIFICATION
@@ -2187,15 +2227,15 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
         })
         .catch((err) => console.error("Resend OTP Email Error:", err));
 
-      return `🔄 *تم إعادة إرسال كود تفعيل جديد عبر البريد الإلكتروني!*\n\n📧 البريد الإلكتروني: \`${session.email}\`\n🔐 **كود التفعيل الجديد**: \`${newOtp}\`\n\nبرجاء كتابة الكود الجديد للتحقق والتفعيل:`;
+      return `🔄 *تم إعادة إرسال كود تفعيل جديد عبر البريد الإلكتروني!*\n\n📧 البريد الإلكتروني: \`${session.email}\`\n\nبرجاء كتابة الكود الجديد للتحقق والتفعيل:`;
     }
 
     if (trimmed === session.otpCode) {
       session.isVerified = true;
-      const result = finalizeTelegramRegistration(chatId, session, userInfo);
+      const result = await finalizeTelegramRegistration(chatId, session, userInfo);
       return result.reply;
     } else {
-      return `❌ *كود التفعيل غير صحيح!*\n\nكود التفعيل المكون من 6 أرقام الذي تم إرساله لبريدك (\`${session.email}\`) هو: \`${session.otpCode}\`\n\nبرجاء كتابة الكود الصحيح المكتوب أعلاه أو أرسل "إعادة إرسال":`;
+      return `❌ *كود التفعيل غير صحيح!*\n\nبرجاء كتابة الكود المرسل إلى بريدك أو أرسل "إعادة إرسال" للحصول على كود جديد:`;
     }
   }
 
@@ -2264,40 +2304,366 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
   return await generateAgencyBotReply(trimmed);
 }
 
-// Agency Clients API Endpoints
-app.get("/api/agency/clients", (_req, res) => {
-  return res.json({ success: true, clients: registeredWorkspacesStore });
-});
+app.patch(
+  "/api/admin/workspaces/:workspaceId/operational",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("admin workspace operational update", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+    const status = String(req.body?.status || "");
 
-app.post("/api/agency/clients", (req, res) => {
-  const { workspace } = req.body;
-  if (req.body.workspaces && Array.isArray(req.body.workspaces)) {
-    req.body.workspaces.forEach(ws => {
-      const idx = registeredWorkspacesStore.findIndex(w => w.id === ws.id);
-      if (idx >= 0) registeredWorkspacesStore[idx] = { ...registeredWorkspacesStore[idx], ...ws };
-      else registeredWorkspacesStore.unshift(ws);
-    });
-  } else if (workspace && workspace.id) {
-    const idx = registeredWorkspacesStore.findIndex((w) => w.id === workspace.id);
-    if (idx >= 0) {
-      registeredWorkspacesStore[idx] = { ...registeredWorkspacesStore[idx], ...workspace };
-    } else {
-      registeredWorkspacesStore.unshift(workspace);
+    if (!new Set(["active", "pending", "suspended"]).has(status)) {
+      return res.status(400).json({ error: "Unsupported workspace status" });
     }
+
+    await adminDb.runTransaction(async (transaction) => {
+      const workspaceRef = adminDb.collection("workspaces").doc(workspaceId);
+      const snapshot = await transaction.get(workspaceRef);
+      if (!snapshot.exists) throw new Error("WORKSPACE_NOT_FOUND");
+
+      transaction.update(workspaceRef, {
+        status,
+        updatedAt: Timestamp.now(),
+      });
+      const auditRef = adminDb.collection("audit_logs").doc(
+        `AUD-${randomBytes(16).toString("hex")}`
+      );
+      transaction.create(auditRef, {
+        id: auditRef.id,
+        timestamp: Timestamp.now(),
+        actorUid: req.foxAuth?.uid,
+        actorName: req.foxAuth?.profile?.name || "Super Admin",
+        actorEmail: req.foxAuth?.email || "",
+        actorRole: "super_admin",
+        workspaceId,
+        action: "workspace_status_updated",
+        details: { status },
+      });
+    });
+
+    const snapshot = await adminDb.collection("workspaces").doc(workspaceId).get();
+    const authoritative = authoritativeWorkspaceFromDocument(
+      snapshot.id,
+      snapshot.data() || {}
+    );
+    registeredWorkspacesStore = await refreshAuthoritativeWorkspaceCache(
+      registeredWorkspacesStore,
+      [workspaceId],
+      async () => authoritative
+    );
+
+    return res.json({
+      success: true,
+      workspace: authoritativeWorkspaceToAdminDto(authoritative),
+    });
+  })
+);
+
+app.delete(
+  "/api/admin/workspaces/:workspaceId",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("admin workspace soft deletion", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+    const result = await adminDb.runTransaction(async (transaction) => {
+      const workspaceRef = adminDb.collection("workspaces").doc(workspaceId);
+      const snapshot = await transaction.get(workspaceRef);
+      if (!snapshot.exists) return "not_found" as const;
+      if (snapshot.data()?.status === "deleted") return "already_deleted" as const;
+
+      const now = Timestamp.now();
+      transaction.update(workspaceRef, {
+        status: "deleted",
+        deletedAt: now,
+        accessRevokedAt: now,
+        updatedAt: now,
+      });
+      const auditRef = adminDb.collection("audit_logs").doc(
+        `AUD-${randomBytes(16).toString("hex")}`
+      );
+      transaction.create(auditRef, {
+        id: auditRef.id,
+        timestamp: now,
+        actorUid: req.foxAuth?.uid,
+        actorName: req.foxAuth?.profile?.name || "Super Admin",
+        actorEmail: req.foxAuth?.email || "",
+        actorRole: "super_admin",
+        workspaceId,
+        action: "workspace_access_revoked",
+        details: { retention: "tenant data retained pending approved purge policy" },
+      });
+      return "deleted" as const;
+    });
+
+    if (result === "not_found") {
+      return res.status(404).json({ error: "Workspace not found" });
+    }
+
+    registeredWorkspacesStore = registeredWorkspacesStore.filter(
+      (workspace) => workspace.id !== workspaceId
+    );
+    await stopWorkspaceTelegramPolling(workspaceId).catch(() => {});
+
+    return res.json({ success: true, status: result });
+  })
+);
+
+// Agency Clients API Endpoints
+app.get(
+  "/api/agency/clients",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  (_req, res) => {
+    return res.json({
+      success: true,
+      clients: registeredWorkspacesStore.map(
+        authoritativeWorkspaceToAdminDto
+      ),
+    });
   }
-  syncWorkspaceTelegramBots().catch((err) =>
-    console.warn("Workspace Telegram sync warning:", err)
-  );
+);
 
-  return res.json({ success: true, clients: registeredWorkspacesStore });
-});
+app.post(
+  "/api/agency/clients/refresh",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("authoritative workspace cache refresh", async (req, res) => {
+    const workspaceIds = Array.isArray(req.body?.workspaceIds)
+      ? req.body.workspaceIds
+          .filter((value: unknown) => typeof value === "string")
+          .map((value: string) => value.trim())
+          .filter(Boolean)
+          .slice(0, 100)
+      : [];
 
-app.delete("/api/agency/clients/:id", (req, res) => {
-  const { id } = req.params;
-  registeredWorkspacesStore = registeredWorkspacesStore.filter((w) => w.id !== id);
-  stopWorkspaceTelegramPolling(String(id)).catch(() => {});
-  return res.json({ success: true, message: "Client workspace deleted", clients: registeredWorkspacesStore });
-});
+    if (!workspaceIds.length) {
+      return res.status(400).json({
+        success: false,
+        code: "WORKSPACE_IDS_REQUIRED",
+        error: "workspaceIds must contain at least one workspace identifier",
+      });
+    }
+
+    registeredWorkspacesStore =
+      await refreshAuthoritativeWorkspaceCache(
+        registeredWorkspacesStore,
+        workspaceIds,
+        async (workspaceId) => {
+          const snapshot = await adminDb
+            .collection("workspaces")
+            .doc(workspaceId)
+            .get();
+
+          return snapshot.exists
+            ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+            : null;
+        }
+      );
+
+    await syncWorkspaceTelegramBots();
+
+    return res.json({
+      success: true,
+      clients: registeredWorkspacesStore.map(
+        authoritativeWorkspaceToAdminDto
+      ),
+    });
+  })
+);
+
+app.delete(
+  "/api/agency/clients/:id",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("authoritative workspace cache removal refresh", async (req, res) => {
+    const workspaceId = String(req.params.id || "").trim();
+
+    registeredWorkspacesStore =
+      await refreshAuthoritativeWorkspaceCache(
+        registeredWorkspacesStore,
+        [workspaceId],
+        async (id) => {
+          const snapshot = await adminDb
+            .collection("workspaces")
+            .doc(id)
+            .get();
+          return snapshot.exists
+            ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+            : null;
+        }
+      );
+
+    if (!registeredWorkspacesStore.some((workspace) => workspace.id === workspaceId)) {
+      await stopWorkspaceTelegramPolling(workspaceId).catch(() => {});
+    }
+
+    return res.json({
+      success: true,
+      message: "Runtime cache refreshed from authoritative Firestore state",
+      clients: registeredWorkspacesStore.map(
+        authoritativeWorkspaceToAdminDto
+      ),
+    });
+  })
+);
+
+app.post(
+  "/api/payments/submit",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("authoritative payment submission", async (req, res) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const workspace = requireWorkspaceOwner(req, res, workspaceId);
+    if (!workspace) return;
+
+    try {
+      const result = await submitPayment(
+        {
+          workspaceId,
+          paymentType: req.body?.paymentType,
+          planId: req.body?.planId,
+          extraConversationsCount: req.body?.extraConversationsCount,
+          transactionRef: req.body?.transactionRef,
+          screenshotUrl: req.body?.screenshotUrl,
+        },
+        {
+          now: () => new Date(),
+          nextPaymentId: () => `pay_${randomBytes(16).toString("hex")}`,
+          referenceId: (normalizedReference) =>
+            createHash("sha256").update(normalizedReference).digest("hex"),
+          runTransaction: (operation) =>
+            adminDb.runTransaction(async (transaction) =>
+              operation({
+                async get(documentPath) {
+                  const snapshot = await transaction.get(adminDb.doc(documentPath));
+                  return snapshot.exists ? snapshot.data() || null : null;
+                },
+                create(documentPath, data) {
+                  transaction.create(adminDb.doc(documentPath), data);
+                },
+              })
+            ),
+        }
+      );
+
+      return res.status(201).json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof PaymentSubmissionError) {
+        const conflict = error.code === "PAYMENT_REFERENCE_ALREADY_USED";
+        return res.status(conflict ? 409 : 400).json({
+          success: false,
+          code: error.code,
+          error: error.message,
+        });
+      }
+      throw error;
+    }
+  })
+);
+
+app.post(
+  "/api/admin/payments/:paymentId/transition",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("authoritative payment transition", async (req, res) => {
+    const auth = req.foxAuth!;
+
+    try {
+      const result = await transitionPayment(
+        {
+          paymentId: req.params.paymentId,
+          action: req.body?.action,
+          reason: req.body?.reason,
+        },
+        {
+          uid: auth.uid,
+          email: String(auth.email || "super_admin"),
+          name: String(
+            auth.profile?.name ||
+            auth.profile?.displayName ||
+            auth.email ||
+            "Super Admin"
+          ),
+          role: "super_admin",
+        },
+        {
+          now: () => new Date(),
+          timestampFromDate: (date) => Timestamp.fromDate(date),
+          nextAuditId: () => `AUD-${randomBytes(16).toString("hex")}`,
+          runTransaction: (operation) =>
+            adminDb.runTransaction(async (adminTransaction) =>
+              operation({
+                async get(documentPath) {
+                  const snapshot = await adminTransaction.get(
+                    adminDb.doc(documentPath)
+                  );
+                  return snapshot.exists
+                    ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+                    : null;
+                },
+                update(documentPath, updates) {
+                  adminTransaction.update(
+                    adminDb.doc(documentPath),
+                    updates
+                  );
+                },
+                create(documentPath, value) {
+                  adminTransaction.create(
+                    adminDb.doc(documentPath),
+                    value
+                  );
+                },
+              })
+            ),
+        }
+      );
+
+      registeredWorkspacesStore =
+        await refreshAuthoritativeWorkspaceCache(
+          registeredWorkspacesStore,
+          [result.workspaceId],
+          async (workspaceId) => {
+            const snapshot = await adminDb
+              .collection("workspaces")
+              .doc(workspaceId)
+              .get();
+            return snapshot.exists
+              ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+              : null;
+          }
+        );
+
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof PaymentTransitionError) {
+        const status =
+          error.code === "PAYMENT_NOT_FOUND" ||
+          error.code === "WORKSPACE_NOT_FOUND"
+            ? 404
+            : error.code === "PAYMENT_ALREADY_PROCESSED"
+              ? 409
+              : 400;
+        return res.status(status).json({
+          success: false,
+          code: error.code,
+          error: error.message,
+        });
+      }
+      throw error;
+    }
+  })
+);
 
 app.get("/api/agency/leads", (_req, res) => {
   return res.json({ success: true, leads: registeredLeadsStore });
@@ -2326,11 +2692,20 @@ app.post("/api/agency/ratings", (req, res) => {
 });
 
 // Subscriber Modification Requests Endpoints
-app.get("/api/agency/modification-requests", (_req, res) => {
-  return res.json({ success: true, requests: subscriberModificationRequestsStore });
-});
+app.get(
+  "/api/agency/modification-requests",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  (_req, res) => {
+    return res.json({ success: true, requests: subscriberModificationRequestsStore });
+  }
+);
 
-app.post("/api/agency/modification-requests", async (req, res) => {
+app.post(
+  "/api/agency/modification-requests",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("workspace modification request creation", async (req, res) => {
   const { workspaceId, proposedData, adminNotes } = req.body;
   if (!workspaceId || !proposedData) {
     return res.status(400).json({ error: "workspaceId and proposedData are required" });
@@ -2395,13 +2770,34 @@ app.post("/api/agency/modification-requests", async (req, res) => {
     request: newReq,
     requests: subscriberModificationRequestsStore,
   });
-});
 
-app.post("/api/agency/modification-requests/:id/confirm-by-client", async (req, res) => {
-  const { id } = req.params;
+  })
+);
+
+app.post(
+  "/api/agency/modification-requests/:id/confirm-by-client",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("workspace modification client confirmation", async (req, res) => {
+    const trustedWorkspace = requireAuthenticatedWorkspace(
+      req,
+      res,
+      req.foxAuth?.workspaceId || ""
+    );
+    if (!trustedWorkspace) {
+      return;
+    }
+    const { id } = req.params;
   const modReq = subscriberModificationRequestsStore.find((r) => r.id === id);
   if (!modReq) {
     return res.status(404).json({ error: "Modification request not found" });
+  }
+
+  if (req.foxAuth?.workspaceId !== modReq.workspaceId) {
+    return res.status(403).json({ error: "Workspace access denied" });
+  }
+
+  if (modReq.status !== "AWAITING_CLIENT_CONFIRMATION") {
+    return res.status(409).json({ error: "Modification request already processed" });
   }
 
   modReq.status = "CLIENT_CONFIRMED";
@@ -2421,52 +2817,98 @@ app.post("/api/agency/modification-requests/:id/confirm-by-client", async (req, 
     request: modReq,
     requests: subscriberModificationRequestsStore,
   });
-});
 
-app.post("/api/agency/modification-requests/:id/approve", async (req, res) => {
-  const { id } = req.params;
-  const { adminNotes } = req.body;
+  })
+);
 
-  const modReq = subscriberModificationRequestsStore.find((r) => r.id === id);
-  if (!modReq) {
-    return res.status(404).json({ error: "Modification request not found" });
-  }
+app.post(
+  "/api/agency/modification-requests/:id/approve",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("workspace modification approval", async (req, res) => {
+    const { id } = req.params;
+    const { adminNotes } = req.body;
+    const modReq = subscriberModificationRequestsStore.find((item) => item.id === id);
 
-  modReq.status = "APPROVED";
-  modReq.updatedAt = new Date().toISOString();
-  if (adminNotes) modReq.adminNotes = adminNotes;
+    if (!modReq) {
+      return res.status(404).json({ error: "Modification request not found" });
+    }
 
-  const wsIdx = registeredWorkspacesStore.findIndex((w) => w.id === modReq.workspaceId);
-  if (wsIdx >= 0) {
-    const targetWs = registeredWorkspacesStore[wsIdx];
-    registeredWorkspacesStore[wsIdx] = {
-      ...targetWs,
-      name: modReq.proposedData.name || targetWs.name,
-      ownerName: modReq.proposedData.ownerName || targetWs.ownerName,
-      phone: modReq.proposedData.phone || targetWs.phone,
-      ownerEmail: modReq.proposedData.email || targetWs.ownerEmail,
-      planId: modReq.proposedData.planId || targetWs.planId,
-    };
-  }
+    if (modReq.status !== "CLIENT_CONFIRMED") {
+      return res.status(409).json({
+        success: false,
+        code: "MODIFICATION_REQUEST_NOT_CONFIRMED",
+        error: "Modification request is not ready for approval",
+      });
+    }
 
-  if (modReq.chatId && activeTelegramToken) {
-    await callTelegramApi("sendMessage", {
-      chat_id: modReq.chatId,
-      text: `🎉 *تمت الموافقة على تعديل بياناتك بنجاح من صاحب الوكالة!* 🦊🤖\n\nتم تحديث بيانات حسابك في المنصة رسمياً:\n• **اسم النشاط**: ${modReq.proposedData.name}\n• **اسم المالك**: ${modReq.proposedData.ownerName}\n• **رقم الهاتف**: ${modReq.proposedData.phone}\n• **البريد**: ${modReq.proposedData.email}\n• **الباقة**: ${modReq.proposedData.planId}`,
-      parse_mode: "Markdown",
-    }).catch(() => {});
-  }
+    await adminDb.runTransaction(async (transaction) => {
+      const workspaceRef = adminDb
+        .collection("workspaces")
+        .doc(modReq.workspaceId);
+      const workspaceSnapshot = await transaction.get(workspaceRef);
 
-  return res.json({
-    success: true,
-    message: "تمت الموافقة على طلب تعديل البيانات وتحديث بيانات حساب المشترك فوراً!",
-    request: modReq,
-    clients: registeredWorkspacesStore,
-    requests: subscriberModificationRequestsStore,
-  });
-});
+      if (!workspaceSnapshot.exists) {
+        throw new Error("WORKSPACE_NOT_FOUND");
+      }
 
-app.post("/api/agency/modification-requests/:id/reject", async (req, res) => {
+      const current = workspaceSnapshot.data() || {};
+      transaction.update(workspaceRef, {
+        name: modReq.proposedData.name || current.name,
+        ownerName: modReq.proposedData.ownerName || current.ownerName,
+        phone: modReq.proposedData.phone || current.phone,
+        ownerEmail: modReq.proposedData.email || current.ownerEmail,
+        updatedAt: Timestamp.now(),
+      });
+    });
+
+    modReq.status = "APPROVED";
+    modReq.updatedAt = new Date().toISOString();
+    if (adminNotes) modReq.adminNotes = adminNotes;
+
+    registeredWorkspacesStore =
+      await refreshAuthoritativeWorkspaceCache(
+        registeredWorkspacesStore,
+        [modReq.workspaceId],
+        async (workspaceId) => {
+          const snapshot = await adminDb
+            .collection("workspaces")
+            .doc(workspaceId)
+            .get();
+          return snapshot.exists
+            ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+            : null;
+        }
+      );
+
+    if (modReq.chatId && activeTelegramToken) {
+      await callTelegramApi("sendMessage", {
+        chat_id: modReq.chatId,
+        text: `🎉 *تمت الموافقة على تعديل بياناتك بنجاح من صاحب الوكالة!*`,
+        parse_mode: "Markdown",
+      }).catch(() => {});
+    }
+
+    return res.json({
+      success: true,
+      message: "تمت الموافقة على طلب تعديل البيانات.",
+      request: modReq,
+      clients: registeredWorkspacesStore.map(
+        authoritativeWorkspaceToAdminDto
+      ),
+      requests: subscriberModificationRequestsStore,
+    });
+  })
+);
+
+app.post(
+  "/api/agency/modification-requests/:id/reject",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("workspace modification rejection", async (req, res) => {
   const { id } = req.params;
   const { adminNotes } = req.body;
 
@@ -2493,7 +2935,9 @@ app.post("/api/agency/modification-requests/:id/reject", async (req, res) => {
     request: modReq,
     requests: subscriberModificationRequestsStore,
   });
-});
+
+  })
+);
 
 // Dedicated Telegram Bot Client Authenticated Modification Request Endpoint
 app.post("/api/telegram/client-data-request", async (req, res) => {
@@ -2572,7 +3016,7 @@ app.post("/api/telegram/client-data-request", async (req, res) => {
     success: true,
     message: "تم استلام طلب التعديل والتحقق من الهوية بنجاح، وتحويله لصاحب الوكالة للموافقة والاعتماد!",
     request: newReq,
-    workspace: ws,
+    workspace: authoritativeWorkspaceToClientDto(ws),
     requests: subscriberModificationRequestsStore,
   });
 });
@@ -2873,6 +3317,41 @@ function requireAuthenticatedWorkspace(
   return workspace;
 }
 
+function requireWorkspaceOwner(
+  req: FoxAuthenticatedRequest,
+  res: any,
+  requestedWorkspaceId: string
+) {
+  const workspace = requireAuthenticatedWorkspace(
+    req,
+    res,
+    requestedWorkspaceId
+  );
+
+  if (!workspace) {
+    return null;
+  }
+
+  const auth = req.foxAuth;
+
+  if (
+    auth?.role !== "super_admin" &&
+    (
+      auth?.role !== "client_owner" ||
+      String(workspace.ownerUid || "") !== String(auth.uid)
+    )
+  ) {
+    res.status(403).json({
+      success: false,
+      code: "WORKSPACE_OWNER_REQUIRED",
+      error: "Workspace owner access is required",
+    });
+    return null;
+  }
+
+  return workspace;
+}
+
 function requireWorkspaceFeature(
   workspace: any,
   feature: FoxFeature
@@ -2940,6 +3419,31 @@ function getWorkspaceById(workspaceId: string) {
   );
 }
 
+async function withWorkspaceRuntimeIntegrations(workspace: any) {
+  const workspaceId = String(workspace?.id || "");
+
+  if (!workspaceId) {
+    return workspace;
+  }
+
+  const runtimeWorkspace =
+    sanitizeAuthoritativeWorkspaceForRuntime(workspace);
+  const [sheetsToken, crmWebhookUrl] = await Promise.all([
+    getWorkspaceSecret(workspaceId, "googleSheetsAccessToken"),
+    getWorkspaceSecret(workspaceId, "externalCrmWebhookUrl"),
+  ]);
+
+  if (sheetsToken) {
+    runtimeWorkspace.googleSheetsAccessToken = sheetsToken;
+  }
+
+  if (crmWebhookUrl) {
+    runtimeWorkspace.externalCrmWebhookUrl = crmWebhookUrl;
+  }
+
+  return runtimeWorkspace;
+}
+
 async function generateWorkspaceTelegramReply(
   workspace: any,
   chatId: string,
@@ -2961,7 +3465,10 @@ async function generateWorkspaceTelegramReply(
   }
 
   const result = await aiAgentService.generateChatResponse({
-    workspace,
+    workspace:
+      await withWorkspaceRuntimeIntegrations(
+        workspace
+      ),
     message: userMsg,
     channel: "telegram",
     sessionId: `telegram:${workspace.id}:${chatId}`,
@@ -2983,7 +3490,8 @@ const workspaceTelegramRuntimeTokens =
  * Priority:
  * 1) Runtime memory cache
  * 2) Encrypted Workspace Secret Vault
- * 3) Legacy plaintext workspace field (one-time migration)
+ *
+ * Legacy workspace fields are never read here; migration is explicit.
  */
 async function getWorkspaceTelegramRuntimeToken(
   workspace: any
@@ -3020,60 +3528,9 @@ async function getWorkspaceTelegramRuntimeToken(
     return cleanToken;
   }
 
-  // --------------------------------------------------------
-  // ONE-TIME LEGACY MIGRATION
-  // --------------------------------------------------------
-
-  const legacyToken =
-    String(
-      workspace?.telegramBotToken || ""
-    ).trim();
-
-  if (!legacyToken) {
-    return "";
-  }
-
-  await setWorkspaceSecret(
-    workspaceId,
-    "telegramBotToken",
-    legacyToken
-  );
-
-  workspaceTelegramRuntimeTokens.set(
-    workspaceId,
-    legacyToken
-  );
-
-  try {
-    await adminDb
-      .collection("workspaces")
-      .doc(workspaceId)
-      .update({
-        telegramBotToken:
-          FieldValue.delete(),
-
-        telegramSecretMigratedAt:
-          new Date().toISOString(),
-
-        updatedAt:
-          new Date().toISOString(),
-      });
-
-    // Also remove it from the server's in-memory workspace.
-    delete workspace.telegramBotToken;
-
-    console.log(
-      `🔐 [Workspace Telegram] Legacy plaintext token migrated | Workspace=${workspaceId}`
-    );
-
-  } catch (error) {
-    console.error(
-      `❌ [Workspace Telegram] Plaintext cleanup failed | Workspace=${workspaceId}`,
-      error
-    );
-  }
-
-  return legacyToken;
+  // Legacy plaintext values are migrated only through the explicit,
+  // authenticated admin migration endpoint.
+  return "";
 }
 
 const workspaceTelegramRatingSessions = new Set<string>();
@@ -3943,6 +4400,286 @@ app.post(
 );
 
 // ==========================================================
+// EXPLICIT LEGACY WORKSPACE SECRET MIGRATION
+// ==========================================================
+
+app.post(
+  "/api/admin/workspaces/:workspaceId/migrate-legacy-entitlement",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("legacy workspace entitlement migration", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+    const result = await migrateLegacyWorkspaceEntitlement(workspaceId, {
+      async loadWorkspace(id) {
+        const snapshot = await adminDb.collection("workspaces").doc(id).get();
+        return snapshot.exists ? snapshot.data() || null : null;
+      },
+      async writeEntitlement(id, expiry) {
+        await adminDb.collection("workspaces").doc(id).update({
+          entitlementExpiresAt: Timestamp.fromDate(expiry),
+          entitlementMigratedAt: new Date().toISOString(),
+        });
+      },
+    });
+
+    if (result.status !== "not_found") {
+      registeredWorkspacesStore =
+        await refreshAuthoritativeWorkspaceCache(
+          registeredWorkspacesStore,
+          [workspaceId],
+          async (id) => {
+            const snapshot = await adminDb.collection("workspaces").doc(id).get();
+            return snapshot.exists
+              ? authoritativeWorkspaceFromDocument(
+                  snapshot.id,
+                  snapshot.data() || {}
+                )
+              : null;
+          }
+        );
+    }
+
+    return res.status(result.status === "not_found" ? 404 : 200).json({
+      success: result.status !== "not_found",
+      ...result,
+    });
+  })
+);
+
+app.post(
+  "/api/admin/workspaces/:workspaceId/migrate-legacy-secrets",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("legacy workspace secret migration", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+
+    if (!workspaceId) {
+      return res.status(400).json({
+        success: false,
+        code: "WORKSPACE_ID_REQUIRED",
+        error: "workspaceId is required",
+      });
+    }
+
+    const result = await migrateLegacyWorkspaceSecrets(workspaceId, {
+      async loadWorkspace(id) {
+        const snapshot = await adminDb
+          .collection("workspaces")
+          .doc(id)
+          .get();
+        return snapshot.exists
+          ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+          : null;
+      },
+      async readSecret(id, name) {
+        return getWorkspaceSecret(id, name);
+      },
+      async writeSecret(id, name, value) {
+        await setWorkspaceSecret(id, name, value);
+      },
+      async validateSecret(name, value) {
+        if (name === "externalCrmWebhookUrl") {
+          await validateExternalCrmWebhookUrl(value);
+        }
+      },
+      async removeLegacyFields(id, fields) {
+        const deletions = Object.fromEntries(
+          fields.map((field) => [field, FieldValue.delete()])
+        );
+        await adminDb
+          .collection("workspaces")
+          .doc(id)
+          .update({
+            ...deletions,
+            legacySecretsMigratedAt: Timestamp.now(),
+          });
+      },
+    });
+
+    registeredWorkspacesStore =
+      await refreshAuthoritativeWorkspaceCache(
+        registeredWorkspacesStore,
+        [workspaceId],
+        async (id) => {
+          const snapshot = await adminDb
+            .collection("workspaces")
+            .doc(id)
+            .get();
+          return snapshot.exists
+            ? authoritativeWorkspaceFromDocument(
+                snapshot.id,
+                snapshot.data() || {}
+              )
+            : null;
+        }
+      );
+
+    return res.json({
+      success: true,
+      migratedFields: result.migrated,
+      existingVaultFields: result.alreadyPresent,
+      removedLegacyFields: result.removedLegacyFields,
+    });
+  })
+);
+
+// ==========================================================
+// SECURE TENANT INTEGRATION SECRET MANAGEMENT
+// ==========================================================
+
+app.post(
+  "/api/integrations/workspace/:workspaceId/google-sheets",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("Google Sheets credential storage", async (req: any, res) => {
+    const workspace = requireWorkspaceOwner(
+      req,
+      res,
+      req.params.workspaceId
+    );
+
+    if (!workspace) {
+      return;
+    }
+
+    const access = requireWorkspaceFeature(
+      workspace,
+      "google_sheets"
+    );
+
+    if (!access.allowed) {
+      return res.status(access.status).json(access);
+    }
+
+    const accessToken = String(req.body?.accessToken || "").trim();
+    const spreadsheetId = String(req.body?.spreadsheetId || "").trim();
+
+    if (!accessToken || !spreadsheetId) {
+      return res.status(400).json({
+        success: false,
+        code: "GOOGLE_SHEETS_CREDENTIALS_REQUIRED",
+        error: "Google Sheets access token and spreadsheet ID are required",
+      });
+    }
+
+    const workspaceId = String(workspace.id);
+    const now = new Date().toISOString();
+
+    await setWorkspaceSecret(
+      workspaceId,
+      "googleSheetsAccessToken",
+      accessToken
+    );
+    await adminDb
+      .collection("workspaces")
+      .doc(workspaceId)
+      .update({
+        googleSheetsAccessToken: FieldValue.delete(),
+        crmSpreadsheetId: spreadsheetId,
+        googleSheetsConnectedAt: now,
+        updatedAt: now,
+      });
+
+    const cached = getWorkspaceById(workspaceId);
+
+    if (cached) {
+      delete cached.googleSheetsAccessToken;
+      cached.crmSpreadsheetId = spreadsheetId;
+      cached.googleSheetsConnectedAt = now;
+      cached.updatedAt = now;
+    }
+
+    return res.json({
+      success: true,
+      connected: true,
+      crmSpreadsheetId: spreadsheetId,
+    });
+  })
+);
+
+app.post(
+  "/api/integrations/workspace/:workspaceId/external-crm",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("External CRM webhook storage", async (req: any, res) => {
+    const workspace = requireWorkspaceOwner(
+      req,
+      res,
+      req.params.workspaceId
+    );
+
+    if (!workspace) {
+      return;
+    }
+
+    const workspaceId = String(workspace.id);
+    const webhookUrl = String(req.body?.webhookUrl || "").trim();
+    const now = new Date().toISOString();
+
+    if (!webhookUrl) {
+      await deleteWorkspaceSecret(workspaceId, "externalCrmWebhookUrl");
+      await adminDb
+        .collection("workspaces")
+        .doc(workspaceId)
+        .update({
+          externalCrmWebhookUrl: FieldValue.delete(),
+          externalCrmWebhookConfigured: false,
+          externalCrmWebhookUpdatedAt: now,
+          updatedAt: now,
+        });
+
+      const cached = getWorkspaceById(workspaceId);
+
+      if (cached) {
+        delete cached.externalCrmWebhookUrl;
+        cached.externalCrmWebhookConfigured = false;
+        cached.externalCrmWebhookUpdatedAt = now;
+        cached.updatedAt = now;
+      }
+
+      return res.json({ success: true, configured: false });
+    }
+
+    try {
+      await validateExternalCrmWebhookUrl(webhookUrl);
+    } catch (error: any) {
+      return res.status(400).json({
+        success: false,
+        code: "UNSAFE_EXTERNAL_CRM_WEBHOOK",
+        error: error?.message || "External CRM webhook is not allowed",
+      });
+    }
+
+    await setWorkspaceSecret(
+      workspaceId,
+      "externalCrmWebhookUrl",
+      webhookUrl
+    );
+    await adminDb
+      .collection("workspaces")
+      .doc(workspaceId)
+      .update({
+        externalCrmWebhookUrl: FieldValue.delete(),
+        externalCrmWebhookConfigured: true,
+        externalCrmWebhookUpdatedAt: now,
+        updatedAt: now,
+      });
+
+    const cached = getWorkspaceById(workspaceId);
+
+    if (cached) {
+      delete cached.externalCrmWebhookUrl;
+      cached.externalCrmWebhookConfigured = true;
+      cached.externalCrmWebhookUpdatedAt = now;
+      cached.updatedAt = now;
+    }
+
+    return res.json({ success: true, configured: true });
+  })
+);
+
+// ==========================================================
 // SECURE TENANT TELEGRAM TOKEN MANAGEMENT
 // ==========================================================
 
@@ -3951,7 +4688,7 @@ app.post(
   authenticateFirebaseRequest,
   async (req: any, res) => {
     const workspace =
-      requireAuthenticatedWorkspace(
+      requireWorkspaceOwner(
         req,
         res,
         req.params.workspaceId
@@ -4168,7 +4905,7 @@ app.post(
   authenticateFirebaseRequest,
   async (req: any, res) => {
     try {
-      const workspace = requireAuthenticatedWorkspace(
+      const workspace = requireWorkspaceOwner(
         req,
         res,
         req.params.workspaceId
@@ -4246,7 +4983,10 @@ async function generateWorkspaceWhatsAppReply(
 
   const result =
     await aiAgentService.generateChatResponse({
-      workspace,
+      workspace:
+        await withWorkspaceRuntimeIntegrations(
+          workspace
+        ),
       message: userMsg,
       channel: "whatsapp",
       sessionId:
@@ -4650,7 +5390,7 @@ app.post(
   async (req: any, res) => {
     try {
       const workspace =
-        requireAuthenticatedWorkspace(
+        requireWorkspaceOwner(
           req,
           res,
           req.params.workspaceId
@@ -4962,7 +5702,7 @@ app.delete(
   async (req: any, res) => {
     try {
       const workspace =
-        requireAuthenticatedWorkspace(
+        requireWorkspaceOwner(
           req,
           res,
           req.params.workspaceId
@@ -6388,29 +7128,11 @@ app.post(
                 ) || 30
               );
 
-            const existingExpiry =
-              workspaceData
-                .subscriptionExpiresAt
-                ? new Date(
-                    `${workspaceData.subscriptionExpiresAt}T23:59:59`
-                  )
-                : null;
-
-            const baseDate =
-              existingExpiry &&
-              existingExpiry.getTime() >
-                now.getTime()
-                ? existingExpiry
-                : now;
-
             const newExpiry =
-              new Date(
-                baseDate.getTime() +
-                  durationDays *
-                    24 *
-                    60 *
-                    60 *
-                    1000
+              calculateEntitlementRenewal(
+                workspaceData.entitlementExpiresAt,
+                now.getTime(),
+                durationDays
               );
 
             workspaceUpdate.planId =
@@ -6424,6 +7146,9 @@ app.post(
                 .toISOString()
                 .split("T")[0];
 
+            workspaceUpdate.entitlementExpiresAt =
+              Timestamp.fromDate(newExpiry);
+
             responsePayload = {
               codeType: "plan",
               planId:
@@ -6431,6 +7156,8 @@ app.post(
               subscriptionExpiresAt:
                 workspaceUpdate
                   .subscriptionExpiresAt,
+              entitlementExpiresAtMillis:
+                newExpiry.getTime(),
             };
 
           } else if (
@@ -6540,6 +7267,11 @@ app.post(
                 subscriptionExpiresAt:
                   responsePayload
                     .subscriptionExpiresAt,
+                entitlementExpiresAt:
+                  Timestamp.fromMillis(
+                    responsePayload
+                      .entitlementExpiresAtMillis
+                  ),
                 status: "active",
               }
             : {}),
@@ -7036,26 +7768,41 @@ app.post("/api/facebook/config", (req, res) => {
 });
 
 // Official Telegram Bot Simulation Endpoint
-app.post("/api/telegram/bot", async (req, res) => {
-  const { message, chatId = "sim_user_101", userInfo = { first_name: "مستخدم تجربة اللوحة", username: "admin_test" } } = req.body;
-  const msg = message || "";
-  const response = await processAgencyBotMessage(String(chatId), userInfo, msg);
-  const isArabic = /[\u0600-\u06FF]/.test(msg);
+app.post(
+  "/api/telegram/bot",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  secureAsyncRoute("Telegram dashboard simulator", async (req, res) => {
+    const {
+      message,
+      chatId = "sim_user_101",
+      userInfo = {
+        first_name: "مستخدم تجربة اللوحة",
+        username: "admin_test",
+      },
+    } = req.body;
+    const msg = String(message || "");
+    const response = await processAgencyBotMessage(
+      String(chatId),
+      userInfo,
+      msg
+    );
+    const isArabic = /[\u0600-\u06FF]/.test(msg);
 
-  return res.json({
-    telegramResponse: response,
-    detectedLanguage: isArabic ? "ar" : "en",
-    registeredClients: registeredWorkspacesStore,
-    registeredLeads: registeredLeadsStore,
-  });
-});
+    return res.json({
+      telegramResponse: response,
+      detectedLanguage: isArabic ? "ar" : "en",
+    });
+  })
+);
 
 
 
 
 // n8n Webhook Simulation & Proxy Endpoint
-app.post("/api/n8n/webhook", async (req, res) => {
-  try {
+app.post(
+  "/api/n8n/webhook",
+  secureAsyncRoute("n8n webhook proxy", async (req, res) => {
     const {
       event,
       payload,
@@ -7185,16 +7932,16 @@ app.post("/api/n8n/webhook", async (req, res) => {
         });
 
       } catch (err: any) {
-        return res.status(500).json({
+        console.error("[FOX n8n External Webhook Error]:", err);
+        return res.status(502).json({
           success: false,
           status: "failed",
-          statusCode: 500,
+          statusCode: 502,
           durationMs:
             Date.now() - startTime,
           workspaceId:
             trustedWorkspace.id,
           error:
-            err.message ||
             "Failed to reach external n8n webhook URL",
           timestamp:
             new Date().toISOString(),
@@ -7242,22 +7989,9 @@ app.post("/api/n8n/webhook", async (req, res) => {
       message:
         `n8n workflow executed successfully for event: ${event || "test_trigger"}`,
     });
+  })
+);
 
-  } catch (err: any) {
-    console.error(
-      "[FOX n8n Endpoint Error]:",
-      err
-    );
-
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      error:
-        err.message ||
-        "n8n request failed",
-    });
-  }
-});
 
 
 // ============================================================
@@ -7482,6 +8216,30 @@ async function startServer() {
 
   console.log(
     `🌐 [FOX Telegram Runtime] Tenant mode=webhook | PublicBaseURL=${getFoxPublicBaseUrl() || "NOT_CONFIGURED"}`
+  );
+
+  app.use(
+    (
+      error: unknown,
+      _request: express.Request,
+      response: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (response.headersSent) {
+        next(error);
+        return;
+      }
+
+      console.error(
+        "[FOX HTTP] Request failed:",
+        error instanceof Error ? error.message : "unknown error"
+      );
+      response.status(500).json({
+        success: false,
+        code: "INTERNAL_SERVER_ERROR",
+        error: "Request processing failed",
+      });
+    }
   );
 
   if (process.env.NODE_ENV !== "production") {

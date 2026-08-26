@@ -16,6 +16,7 @@ import { db } from "../../services/firebase";
 
 import { signInWithGoogleSheets } from "../../services/googleAuthService";
 import { createCRMSpreadsheet } from "../../services/googleSheetsService";
+import { authenticatedFetch } from "../../services/authenticatedFetch";
 import {
   Users,
   Search,
@@ -107,6 +108,7 @@ export const ClientCRM: React.FC = () => {
 
     const q = query(
       ref,
+      where("workspaceId", "==", currentWorkspace.id),
       orderBy("lastInteraction", "desc")
     );
 
@@ -156,9 +158,26 @@ export const ClientCRM: React.FC = () => {
       setIsSyncingSheets(true);
       const { accessToken } = await signInWithGoogleSheets();
       const spreadsheetId = await createCRMSpreadsheet(accessToken, currentWorkspace.name);
-      
+
+      const response = await authenticatedFetch(
+        `/api/integrations/workspace/${encodeURIComponent(
+          currentWorkspace.id
+        )}/google-sheets`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessToken, spreadsheetId }),
+        }
+      );
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result.error || "Secure Google Sheets connection failed"
+        );
+      }
+
       updateWorkspaceField(currentWorkspace.id, {
-        googleSheetsAccessToken: accessToken,
         crmSpreadsheetId: spreadsheetId
       });
       addToast("Successfully connected Google Sheets CRM! ID: " + spreadsheetId, "success");
@@ -396,11 +415,14 @@ export const ClientCRM: React.FC = () => {
     }
 
     const unsubscribeAppointments = onSnapshot(
-      collection(
-        db,
-        "workspaces",
-        workspaceId,
-        "appointments"
+      query(
+        collection(
+          db,
+          "workspaces",
+          workspaceId,
+          "appointments"
+        ),
+        where("workspaceId", "==", workspaceId)
       ),
       (snapshot) => {
         appointmentItems = snapshot.docs
@@ -777,7 +799,10 @@ export const ClientCRM: React.FC = () => {
     );
 
     const unsubscribeRedemptions = onSnapshot(
-      redemptionsRef,
+      query(
+        redemptionsRef,
+        where("workspaceId", "==", currentWorkspace.id)
+      ),
       (snapshot) => {
         const selectedPhone = String(selectedLead.phone || "")
           .replace(/\D/g, "");

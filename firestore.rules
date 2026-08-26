@@ -45,30 +45,108 @@ service cloud.firestore {
       return signedIn() &&
         (
           isSuperAdmin() ||
-          userWorkspaceId() == workspaceId
+          (
+            userWorkspaceId() == workspaceId &&
+            exists(
+              /databases/$(database)/documents/workspaces/$(workspaceId)
+            ) &&
+            (
+              get(
+                /databases/$(database)/documents/workspaces/$(workspaceId)
+              ).data.keys().hasAny(["status"]) == false ||
+              get(
+                /databases/$(database)/documents/workspaces/$(workspaceId)
+              ).data.status != "deleted"
+            )
+          )
         );
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return signedIn() &&
+        userWorkspaceId() == workspaceId &&
+        (
+          !resource.data.keys().hasAny(["status"]) ||
+          resource.data.status != "deleted"
+        ) &&
+        resource.data.ownerUid == request.auth.uid;
+    }
+
+    function hasWorkspaceId(data) {
+      return data.workspaceId is string &&
+        data.workspaceId.size() > 0;
+    }
+
+    function canAccessWorkspaceId(workspaceId) {
+      return isWorkspaceMember(workspaceId);
     }
 
     function ownsResource() {
-      return signedIn() &&
-        (
-          isSuperAdmin() ||
-          (
-            resource.data.workspaceId != null &&
-            resource.data.workspaceId == userWorkspaceId()
-          )
-        );
+      return hasWorkspaceId(resource.data) &&
+        canAccessWorkspaceId(resource.data.workspaceId);
     }
 
     function ownsNewResource() {
-      return signedIn() &&
-        (
-          isSuperAdmin() ||
-          (
-            request.resource.data.workspaceId != null &&
-            request.resource.data.workspaceId == userWorkspaceId()
-          )
-        );
+      return hasWorkspaceId(request.resource.data) &&
+        canAccessWorkspaceId(request.resource.data.workspaceId);
+    }
+
+    function keepsWorkspaceId() {
+      return request.resource.data.workspaceId ==
+        resource.data.workspaceId;
+    }
+
+    function containsNoWorkspaceSecrets(data) {
+      return !data.keys().hasAny([
+        "googleSheetsAccessToken",
+        "telegramBotToken",
+        "externalCrmWebhookUrl",
+        "whatsappAccessToken",
+        "whatsappVerifyToken",
+        "facebookPageAccessToken",
+        "facebookVerifyToken",
+        "password",
+        "passwordHash",
+        "apiKey",
+        "encryptedSecret",
+        "encryptedPayload",
+        "ciphertext",
+        "iv",
+        "authTag"
+      ]);
+    }
+
+    function ownsNestedResource(workspaceId) {
+      return isWorkspaceMember(workspaceId) &&
+        hasWorkspaceId(resource.data) &&
+        resource.data.workspaceId == workspaceId;
+    }
+
+    function ownsNewNestedResource(workspaceId) {
+      return isWorkspaceMember(workspaceId) &&
+        hasWorkspaceId(request.resource.data) &&
+        request.resource.data.workspaceId == workspaceId;
+    }
+
+    function crmLeadBelongsToWorkspace(workspaceId, leadId) {
+      return exists(
+          /databases/$(database)/documents/workspaces/$(workspaceId)/crmLeads/$(leadId)
+        ) &&
+        get(
+          /databases/$(database)/documents/workspaces/$(workspaceId)/crmLeads/$(leadId)
+        ).data.workspaceId == workspaceId;
+    }
+
+    function conversationBelongsToWorkspace(
+      workspaceId,
+      conversationId
+    ) {
+      return exists(
+          /databases/$(database)/documents/workspaces/$(workspaceId)/conversations/$(conversationId)
+        ) &&
+        get(
+          /databases/$(database)/documents/workspaces/$(workspaceId)/conversations/$(conversationId)
+        ).data.workspaceId == workspaceId;
     }
 
     // ========================================================
@@ -90,10 +168,7 @@ service cloud.firestore {
         request.auth.uid == userId &&
         request.resource.data.role == "client_owner" &&
         request.resource.data.workspaceId is string &&
-        exists(
-          /databases/$(database)/documents/workspaces/$(request.resource.data.workspaceId)
-        ) &&
-        get(
+        getAfter(
           /databases/$(database)/documents/workspaces/$(request.resource.data.workspaceId)
         ).data.ownerUid == request.auth.uid;
 
@@ -116,7 +191,8 @@ service cloud.firestore {
     // ========================================================
 
     match /workspaces/{workspaceId} {
-      allow read: if isWorkspaceMember(workspaceId);
+      allow read: if isWorkspaceMember(workspaceId) &&
+        containsNoWorkspaceSecrets(resource.data);
 
       // FOX PRODUCTION REGISTRATION:
       //
@@ -127,53 +203,163 @@ service cloud.firestore {
       // - document must not already exist
       // - ownerUid must be the authenticated Firebase UID
       // - client cannot choose another owner
-      allow create: if signedIn() &&
+      allow create: if
         (
-          isSuperAdmin() ||
-          (
-            !exists(
-              /databases/$(database)/documents/workspaces/$(workspaceId)
-            ) &&
-            request.resource.data.ownerUid == request.auth.uid &&
-            request.resource.data.ownerEmail == request.auth.token.email
-          )
+          signedIn() &&
+          !hasUserProfile() &&
+          !exists(
+            /databases/$(database)/documents/workspaces/$(workspaceId)
+          ) &&
+          request.resource.data.keys().hasAll([
+            "id", "ownerUid", "ownerEmail", "name", "industry",
+            "ownerName", "phone", "status", "planId",
+            "subscriptionExpiresAt", "entitlementExpiresAt",
+            "aiConversationsUsed",
+            "totalCustomers", "totalAppointments", "totalComplaints",
+            "createdAt", "registrationSource", "onboardingStatus",
+            "onboardingCompleted", "onboardingStep",
+            "businessDescription", "onboardingAiReady",
+            "onboardingCatalogReady", "aiSettings"
+          ]) &&
+          request.resource.data.keys().hasOnly([
+            "id", "ownerUid", "ownerEmail", "name", "industry",
+            "ownerName", "phone", "status", "planId",
+            "subscriptionExpiresAt", "entitlementExpiresAt",
+            "aiConversationsUsed",
+            "totalCustomers", "totalAppointments", "totalComplaints",
+            "createdAt", "registrationSource", "onboardingStatus",
+            "onboardingCompleted", "onboardingStep",
+            "businessDescription", "onboardingAiReady",
+            "onboardingCatalogReady", "aiSettings"
+          ]) &&
+          request.resource.data.id == workspaceId &&
+          request.resource.data.ownerUid == request.auth.uid &&
+          request.resource.data.ownerEmail == request.auth.token.email &&
+          getAfter(
+            /databases/$(database)/documents/users/$(request.auth.uid)
+          ).data.workspaceId == workspaceId &&
+          getAfter(
+            /databases/$(database)/documents/users/$(request.auth.uid)
+          ).data.role == "client_owner" &&
+          request.resource.data.status == "active" &&
+          request.resource.data.planId == "starter" &&
+          request.resource.data.subscriptionExpiresAt is string &&
+          request.resource.data.entitlementExpiresAt is timestamp &&
+          request.resource.data.entitlementExpiresAt > request.time &&
+          request.resource.data.entitlementExpiresAt <=
+            request.time + duration.value(31, "d") &&
+          request.resource.data.aiConversationsUsed == 0 &&
+          request.resource.data.totalCustomers == 0 &&
+          request.resource.data.totalAppointments == 0 &&
+          request.resource.data.totalComplaints == 0 &&
+          request.resource.data.registrationSource == "web_portal" &&
+          request.resource.data.onboardingStatus == "in_progress" &&
+          request.resource.data.onboardingCompleted == false &&
+          request.resource.data.onboardingStep == 1 &&
+          request.resource.data.onboardingAiReady == false &&
+          request.resource.data.onboardingCatalogReady == false
         );
 
-      // Tenant owners can change operational workspace settings,
-      // but never billing / entitlement / ownership security fields.
-      allow update: if signedIn() &&
+      // Tenant owners can change an explicit set of operational
+      // fields. Members and future unknown fields default to deny.
+      allow update: if
         (
-          isSuperAdmin() ||
-          (
-            isWorkspaceMember(workspaceId) &&
-            !request.resource.data
-              .diff(resource.data)
-              .affectedKeys()
-              .hasAny([
-                "ownerUid",
-                "planId",
-                "status",
-                "subscriptionExpiresAt",
-                "aiConversationsUsed",
-                "extraConversationsLimit",
-                "extraPackages"
-              ])
-          )
+          isWorkspaceOwner(workspaceId) &&
+          request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              "name", "industry", "ownerName", "phone", "aiSettings",
+              "telegramBotName", "telegramBotStatus",
+              "whatsappBotStatus", "whatsappPhoneNumber",
+              "whatsappPhoneNumberId", "whatsappBusinessAccountId",
+              "whatsappConnectedAt", "onboardingStatus",
+              "onboardingCompleted", "onboardingCompletedAt",
+              "onboardingStep", "businessDescription",
+              "onboardingAiReady", "onboardingCatalogReady",
+              "crmSpreadsheetId"
+            ])
         );
 
       allow delete: if isSuperAdmin();
 
       // ------------------------------------------------------
-      // Workspace-scoped nested collections
-      // CRM events, secrets metadata, future tenant records.
+      // Explicit workspace-scoped collections.
+      // Unknown future collections are denied below.
       // ------------------------------------------------------
 
-      match /{subCollection}/{documentId} {
-        allow read, write: if isWorkspaceMember(workspaceId);
+      match /crmLeads/{leadId} {
+        allow read: if ownsNestedResource(workspaceId);
+        allow delete: if ownsNestedResource(workspaceId);
+        allow create: if ownsNewNestedResource(workspaceId);
+        allow update: if ownsNestedResource(workspaceId) &&
+          ownsNewNestedResource(workspaceId) &&
+          keepsWorkspaceId();
 
-        match /{nestedPath=**} {
-          allow read, write: if isWorkspaceMember(workspaceId);
+        // CRM events are authoritative server records.
+        match /events/{eventId} {
+          allow read: if isWorkspaceMember(workspaceId) &&
+            crmLeadBelongsToWorkspace(workspaceId, leadId);
+          allow create, update, delete: if false;
         }
+      }
+
+      match /appointments/{appointmentId} {
+        allow read: if ownsNestedResource(workspaceId);
+        allow delete: if ownsNestedResource(workspaceId);
+        allow create: if ownsNewNestedResource(workspaceId);
+        allow update: if ownsNestedResource(workspaceId) &&
+          ownsNewNestedResource(workspaceId) &&
+          keepsWorkspaceId();
+      }
+
+      match /conversations/{conversationId} {
+        allow read: if ownsNestedResource(workspaceId);
+        allow create, delete: if false;
+
+        // Browser clients only clear unread state. Conversation
+        // content and routing remain server-authoritative.
+        allow update: if ownsNestedResource(workspaceId) &&
+          ownsNewNestedResource(workspaceId) &&
+          keepsWorkspaceId() &&
+          request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly(["unreadCount", "updatedAt"]) &&
+          request.resource.data.unreadCount is int &&
+          request.resource.data.unreadCount >= 0 &&
+          request.resource.data.updatedAt is string;
+
+        match /messages/{messageId} {
+          allow read: if isWorkspaceMember(workspaceId) &&
+            conversationBelongsToWorkspace(
+              workspaceId,
+              conversationId
+            );
+          allow create, update, delete: if false;
+        }
+      }
+
+      // These records are written by the Admin SDK. Tenant users
+      // may read selected reporting data but cannot forge it.
+      match /couponRedemptions/{redemptionId} {
+        allow read: if ownsNestedResource(workspaceId);
+        allow create, update, delete: if false;
+      }
+
+      match /usage/{usageId} {
+        allow read: if ownsNestedResource(workspaceId);
+        allow create, update, delete: if false;
+      }
+
+      // Shared AI memory is server-only and may contain private
+      // conversation context.
+      match /shared_memory/{memoryId} {
+        allow read, write: if false;
+      }
+
+      match /{unknownCollection}/{document=**} {
+        allow read, write: if false;
       }
     }
 
@@ -183,78 +369,131 @@ service cloud.firestore {
     // ========================================================
 
     match /crmLeads/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /appointments/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /menuItems/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /medicines/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /products/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /productOrders/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /complaints/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /knowledgeFacts/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /coupons/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /supportTickets/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /serviceRatings/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /courses/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /doctors/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /clinicServices/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     match /n8nWorkflows/{docId} {
-      allow read, update, delete: if ownsResource();
+      allow read, delete: if ownsResource();
       allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
+    }
+
+    match /marketing_generated_posts/{docId} {
+      allow read, delete: if ownsResource();
+      allow create: if ownsNewResource();
+      allow update: if ownsResource() &&
+        ownsNewResource() &&
+        keepsWorkspaceId();
     }
 
     // ========================================================
@@ -271,13 +510,12 @@ service cloud.firestore {
           resource.data.workspaceId == userWorkspaceId()
         );
 
-      // Tenant may submit its own payment request.
-      allow create: if signedIn() &&
-        request.resource.data.workspaceId == userWorkspaceId() &&
-        request.resource.data.status == "pending";
+      // Submission and transitions are authoritative server-only.
+      allow create, update, delete: if false;
+    }
 
-      // Approval/rejection is Super Admin only.
-      allow update, delete: if isSuperAdmin();
+    match /paymentReferences/{referenceId} {
+      allow read, write: if false;
     }
 
     // ========================================================
@@ -304,12 +542,44 @@ service cloud.firestore {
 
     match /audit_logs/{docId} {
       allow read: if isSuperAdmin();
-      allow write: if signedIn();
+
+      // Current browser audit creation is used only by the Super
+      // Admin screens. New records bind the actor to Firebase Auth.
+      allow create: if isSuperAdmin() &&
+        request.resource.data.id == docId &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.actorRole == "super_admin" &&
+        request.resource.data.timestamp == request.time &&
+        request.resource.data.actorName == userDoc().data.name &&
+        request.resource.data.actorEmail == request.auth.token.email &&
+        request.resource.data.action is string &&
+        request.resource.data.category is string &&
+        request.resource.data.severity is string &&
+        request.resource.data.target is string &&
+        request.resource.data.details is string;
+
+      // Audit history is append-only for all browser clients.
+      allow update, delete: if false;
     }
 
-    match /gemini_metrics/{docId} {
-      allow read: if signedIn();
-      allow write: if signedIn();
+    match /gemini_metrics/{workspaceId} {
+      allow read: if isSuperAdmin() ||
+        (
+          signedIn() &&
+          resource.data.workspaceId == userWorkspaceId()
+        );
+
+      // The existing diagnostic dashboard persists metrics from a
+      // verified Super Admin session. Normal tenants are read-only.
+      allow create: if isSuperAdmin() &&
+        request.resource.data.workspaceId == workspaceId;
+
+      allow update: if isSuperAdmin() &&
+        resource.data.workspaceId == workspaceId &&
+        request.resource.data.workspaceId ==
+          resource.data.workspaceId;
+
+      allow delete: if false;
     }
 
     // ========================================================

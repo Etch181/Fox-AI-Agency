@@ -3,6 +3,8 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+export { sanitizeForFirestore } from '../utils/firestoreSanitize';
+
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
 export const auth = getAuth(app);
@@ -51,25 +53,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path,
   };
   console.warn('Firestore Operation Notice: ', JSON.stringify(errInfo));
-}
-
-export function sanitizeForFirestore<T>(data: T): T {
-  if (data === null || data === undefined) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return data.map((item) => sanitizeForFirestore(item)) as unknown as T;
-  }
-  if (typeof data === 'object' && !(data instanceof Date)) {
-    const cleaned: Record<string, any> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (value !== undefined) {
-        cleaned[key] = sanitizeForFirestore(value);
-      }
-    }
-    return cleaned as T;
-  }
-  return data;
 }
 
 export async function testFirebaseConnection() {
