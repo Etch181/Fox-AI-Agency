@@ -36,6 +36,7 @@ export interface ExtraPackage {
 
 export interface Workspace {
   id: string;
+  ownerUid?: string;
   name: string;
   industry: IndustryType;
   ownerName: string;

@@ -432,7 +432,7 @@ const AppContent: React.FC = () => {
         if (currentUser.role !== "super_admin") {
           return (
             <WorkspaceGuard>
-              <ClientDashboard />
+              <ClientDashboard onNavigate={setActiveTab} />
             </WorkspaceGuard>
           );
         }
@@ -446,7 +446,7 @@ const AppContent: React.FC = () => {
         if (currentUser.role !== "super_admin") {
           return (
             <WorkspaceGuard>
-              <ClientDashboard />
+              <ClientDashboard onNavigate={setActiveTab} />
             </WorkspaceGuard>
           );
         }

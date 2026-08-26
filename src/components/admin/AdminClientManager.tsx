@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { PlanId, ExtraPackage } from "../../types";
+import { completeRegistration } from "../../utils/registrationFlow";
 import {
   Search,
   Building2,
@@ -65,7 +66,7 @@ export const AdminClientManager: React.FC = () => {
   const [newWsAgentName, setNewWsAgentName] = useState("");
   const [submittingNewWs, setSubmittingNewWs] = useState(false);
 
-  const handleCreateWorkspaceManually = (e: React.FormEvent) => {
+  const handleCreateWorkspaceManually = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newWsName.trim() || !newWsOwnerName.trim() || !newWsEmail.trim() || !newWsPhone.trim()) {
       addToast(
@@ -79,61 +80,65 @@ export const AdminClientManager: React.FC = () => {
 
     setSubmittingNewWs(true);
     try {
-      const createdWs = registerWorkspace(
-        newWsName.trim(),
-        newWsIndustry,
-        newWsOwnerName.trim(),
-        newWsEmail.trim(),
-        newWsPhone.trim()
+      const createdWs = await completeRegistration(
+        () =>
+          registerWorkspace(
+            newWsName.trim(),
+            newWsIndustry,
+            newWsOwnerName.trim(),
+            newWsEmail.trim(),
+            newWsPhone.trim()
+          ),
+        (createdWorkspace) => {
+          const updates: Partial<any> = {
+            status: newWsStatus,
+            planId: newWsPlanId,
+            subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          };
+
+          if (newWsInitialExtraConvs > 0) {
+            updates.extraConversationsLimit = newWsInitialExtraConvs;
+            updates.extraPackages = [
+              {
+                id: `pkg_manual_${Date.now()}`,
+                name: isAr ? `باقة ترحيبية مانيوال (+${newWsInitialExtraConvs} محادثة)` : `Manual Initial Pack (+${newWsInitialExtraConvs} convs)`,
+                conversationsAdded: newWsInitialExtraConvs,
+                priceEGP: 0,
+                addedAt: new Date().toISOString().split("T")[0],
+              },
+            ];
+          }
+
+          if (newWsAgentName.trim()) {
+            updates.aiSettings = {
+              ...createdWorkspace.aiSettings,
+              agentName: newWsAgentName.trim(),
+            };
+          }
+
+          updateWorkspaceField(createdWorkspace.id, updates);
+
+          triggerRegistrationFeedback({
+            workspaceId: createdWorkspace.id,
+            workspaceName: createdWorkspace.name,
+            ownerName: createdWorkspace.ownerName,
+            ownerEmail: createdWorkspace.ownerEmail,
+            phone: createdWorkspace.phone,
+            planId: newWsPlanId,
+            industry: newWsIndustry,
+            source: isAr ? "إضافة مانيوال من المالك (Super Admin Manual)" : "Super Admin Manual Creation",
+          });
+
+          addToast(
+            isAr
+              ? `تم إضافة المنشأة (${createdWorkspace.name}) بنجاح وإسناد باقة ${newWsPlanId.toUpperCase()} لها! 🚀`
+              : `Workspace (${createdWorkspace.name}) created successfully with ${newWsPlanId.toUpperCase()} plan!`,
+            "success"
+          );
+        }
       );
 
-      if (createdWs) {
-        const updates: Partial<any> = {
-          status: newWsStatus,
-          planId: newWsPlanId,
-          subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-        };
-
-        if (newWsInitialExtraConvs > 0) {
-          updates.extraConversationsLimit = newWsInitialExtraConvs;
-          updates.extraPackages = [
-            {
-              id: `pkg_manual_${Date.now()}`,
-              name: isAr ? `باقة ترحيبية مانيوال (+${newWsInitialExtraConvs} محادثة)` : `Manual Initial Pack (+${newWsInitialExtraConvs} convs)`,
-              conversationsAdded: newWsInitialExtraConvs,
-              priceEGP: 0,
-              addedAt: new Date().toISOString().split("T")[0],
-            },
-          ];
-        }
-
-        if (newWsAgentName.trim()) {
-          updates.aiSettings = {
-            ...createdWs.aiSettings,
-            agentName: newWsAgentName.trim(),
-          };
-        }
-
-        updateWorkspaceField(createdWs.id, updates);
-
-        triggerRegistrationFeedback({
-          workspaceId: createdWs.id,
-          workspaceName: createdWs.name,
-          ownerName: createdWs.ownerName,
-          ownerEmail: createdWs.ownerEmail,
-          phone: createdWs.phone,
-          planId: newWsPlanId,
-          industry: newWsIndustry,
-          source: isAr ? "إضافة مانيوال من المالك (Super Admin Manual)" : "Super Admin Manual Creation",
-        });
-
-        addToast(
-          isAr
-            ? `تم إضافة المنشأة (${createdWs.name}) بنجاح وإسناد باقة ${newWsPlanId.toUpperCase()} لها! 🚀`
-            : `Workspace (${createdWs.name}) created successfully with ${newWsPlanId.toUpperCase()} plan!`,
-          "success"
-        );
-      }
+      if (createdWs === null) return;
 
       setNewWsName("");
       setNewWsOwnerName("");
