@@ -8,15 +8,21 @@ import {
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-import firebaseConfig from "../../firebase-applet-config.json";
-
+// SAFETY GATE (server-side): Never import firebase-applet-config.json here.
+// That file is a legacy/production reference and its projectId + databaseId
+// target the PRODUCTION project. Reading it would let the staging runtime
+// reach production Firestore. Instead, require explicit staging env vars and
+// fail closed if they are missing.
 const projectId =
-  process.env.GOOGLE_CLOUD_PROJECT ||
-  firebaseConfig.projectId;
-
+  process.env.GOOGLE_CLOUD_PROJECT;
 const databaseId =
-  (firebaseConfig as any).firestoreDatabaseId ||
-  "(default)";
+  process.env.FIRESTORE_DATABASE_ID || "(default)";
+
+if (!projectId) {
+  throw new Error(
+    "[Firebase Admin] Refusing production config fallback: GOOGLE_CLOUD_PROJECT is required."
+  );
+}
 
 const serviceAccountJson =
   process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON?.trim();
