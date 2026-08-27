@@ -2,7 +2,19 @@ node_modules
 node_modules/
 dist/
 .env
+.env.*
+.env.local
+.env.production
+.env.staging
 firebase-admin-key.json
 firestore-debug.log
 firebase-debug.log
+firebase-debug.*.log
 .firebase/
+.cache/
+
+# --- Backup artifacts (must never be tracked, may contain credentials) ---
+server.ts.before-*
+*.before-*
+*.bak
+*.orig
