@@ -57,6 +57,7 @@ import {
 } from "./src/services/paymentSubmissionService";
 import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
+import { printEnvValidation } from "./src/utils/envValidation";
 dotenv.config();
 
 // ============================================================
@@ -231,7 +232,7 @@ async function verifyAndMigrateWorkspacePassword(
 }
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.FOX_INTERNAL_PORT || process.env.PORT || 3000);
 
 app.use(express.json({ limit: "50mb" }));
 
@@ -449,7 +450,36 @@ app.post("/api/generate-ai-post", async (req, res) => {
 
 // Health Check
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", service: "Fox AI Agency SaaS Engine", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    service: "fox-ai-agency",
+    version: "1.0.0",
+    environment: process.env.NODE_ENV || "development",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Readiness check — validates required startup configuration is present
+// without making expensive provider calls or leaking secrets.
+app.get("/api/ready", (_req, res) => {
+  const checks = [
+    { name: "fox_secret_key", ready: Boolean(process.env.FOX_SECRET_KEY?.trim()) },
+    { name: "firebase_admin_credentials", ready: Boolean(process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON?.trim() || process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) },
+    { name: "public_base_url", ready: Boolean(process.env.FOX_PUBLIC_BASE_URL?.trim() || process.env.PUBLIC_BASE_URL?.trim() || process.env.APP_URL?.trim()) },
+  ];
+
+  const unready = checks.filter((c) => !c.ready);
+  const ready = unready.length === 0;
+
+  return res
+    .status(ready ? 200 : 503)
+    .json({
+      status: ready ? "ready" : "not_ready",
+      service: "fox-ai-agency",
+      ready,
+      environment: process.env.NODE_ENV || "development",
+      checks,
+    });
 });
 
 // Meta Graph API Publishing Endpoint
@@ -457,8 +487,17 @@ app.post("/api/meta/publish-post", async (req, res) => {
   try {
     const { pageId, pageAccessToken, message, imageUrl } = req.body;
 
-    const targetPageId = pageId || "1303288339529348";
-    const targetToken = pageAccessToken || "EABAcoO32gPIBSFpxMQy0l23pr2YMFDPexleFCiV0D7cFNtx1yrIfco27yrhmLBPHEnqb4dHncn99fhC1NGDneTyeTA3u5TcSswhG6eO4laodp1y5S3ZBY17G24WKsUHiKZCLRUYhQ9921jbZAMs9rkR0zgUKXdJqoQfw8gMkFwm1VYH5rU52hSAT5VpNiT81EKsFagYlQPKwaU6ICBQuAZDZD";
+    const targetPageId = pageId || "";
+    const targetToken = pageAccessToken || "";
+
+    // Fail-closed: require explicit page credentials from config or request,
+    // never fall back to a hardcoded tenant identifier.
+    if (!targetPageId || !targetToken) {
+      return res.status(400).json({
+        success: false,
+        error: "صفحة الفيسبوك (pageId) وتوكن الوصول (pageAccessToken) مطلوبان — لم يتم تكوينهما.",
+      });
+    }
 
     if (!message) {
       return res.status(400).json({ error: "محتوى البوست (message) مطلوب للنشر" });
@@ -559,8 +598,15 @@ app.post("/api/meta/publish-post", async (req, res) => {
 // Meta Graph API Connection Verification Endpoint
 app.get("/api/meta/test-connection", async (req, res) => {
   try {
-    const pageId = (req.query.pageId as string) || "1303288339529348";
-    const token = (req.query.token as string) || "EABAcoO32gPIBSFpxMQy0l23pr2YMFDPexleFCiV0D7cFNtx1yrIfco27yrhmLBPHEnqb4dHncn99fhC1NGDneTyeTA3u5TcSswhG6eO4laodp1y5S3ZBY17G24WKsUHiKZCLRUYhQ9921jbZAMs9rkR0zgUKXdJqoQfw8gMkFwm1VYH5rU52hSAT5VpNiT81EKsFagYlQPKwaU6ICBQuAZDZD";
+    const pageId = (req.query.pageId as string) || "";
+    const token = (req.query.token as string) || "";
+
+    if (!pageId || !token) {
+      return res.status(400).json({
+        success: false,
+        error: "pageId and token query parameters are required.",
+      });
+    }
 
     const url = `https://graph.facebook.com/v19.0/${pageId}?fields=name,id,link,followers_count&access_token=${token}`;
     const response = await fetch(url);
@@ -586,13 +632,21 @@ app.get("/api/meta/test-connection", async (req, res) => {
 });
 
 // Active Meta Page Token in memory for Webhooks
-let activeMetaPageAccessToken = process.env.META_PAGE_ACCESS_TOKEN || "EABAcoO32gPIBSFpxMQy0l23pr2YMFDPexleFCiV0D7cFNtx1yrIfco27yrhmLBPHEnqb4dHncn99fhC1NGDneTyeTA3u5TcSswhG6eO4laodp1y5S3ZBY17G24WKsUHiKZCLRUYhQ9921jbZAMs9rkR0zgUKXdJqoQfw8gMkFwm1VYH5rU52hSAT5VpNiT81EKsFagYlQPKwaU6ICBQuAZDZD";
+// NEVER hardcode a real token. Falls back to empty string (integration disabled).
+let activeMetaPageAccessToken = process.env.META_PAGE_ACCESS_TOKEN || "";
 
 // Endpoint to subscribe Facebook Page to App Webhooks (feed, messages)
 app.post("/api/meta/subscribe-page", async (req, res) => {
   try {
-    const pageId = req.body.pageId || "1303288339529348";
+    const pageId = req.body.pageId || "";
     const token = req.body.token || activeMetaPageAccessToken;
+
+    if (!pageId || !token) {
+      return res.status(400).json({
+        success: false,
+        error: "pageId and token are required — Meta integration must be explicitly configured.",
+      });
+    }
 
     if (token) {
       activeMetaPageAccessToken = token;
@@ -663,7 +717,7 @@ app.post("/api/meta/subscribe-page", async (req, res) => {
 async function handleMessengerDirectReply({
   senderPsid,
   userMessage,
-  pageId = "1303288339529348",
+  pageId = "",
   pageAccessToken
 }: {
   senderPsid: string;
@@ -671,6 +725,9 @@ async function handleMessengerDirectReply({
   pageId?: string;
   pageAccessToken: string;
 }) {
+  if (!pageAccessToken) {
+    return { success: false, error: "No page access token configured" };
+  }
   let replyText = "";
   try {
     const ai = getGeminiClient();
@@ -714,7 +771,7 @@ async function handleMetaAutoReply({
   commentId,
   commentText,
   senderName = "العميل",
-  pageId = "1303288339529348",
+  pageId = "",
   pageAccessToken,
   customPublicReply,
   customPrivateDm
@@ -841,11 +898,19 @@ app.post("/api/meta/auto-reply-comment", async (req, res) => {
   try {
     const { commentId, commentText, senderName, pageId, pageAccessToken, customPublicReply, customPrivateDm } = req.body;
 
-    const targetPageId = pageId || "1303288339529348";
-    const targetToken = pageAccessToken || "EABAcoO32gPIBSFpxMQy0l23pr2YMFDPexleFCiV0D7cFNtx1yrIfco27yrhmLBPHEnqb4dHncn99fhC1NGDneTyeTA3u5TcSswhG6eO4laodp1y5S3ZBY17G24WKsUHiKZCLRUYhQ9921jbZAMs9rkR0zgUKXdJqoQfw8gMkFwm1VYH5rU52hSAT5VpNiT81EKsFagYlQPKwaU6ICBQuAZDZD";
+    const targetPageId = pageId || "";
+    const targetToken = pageAccessToken || "";
 
     if (!commentId) {
       return res.status(400).json({ error: "معرف التعليق (commentId) مطلوب للرد التلقائي" });
+    }
+
+    // Fail-closed: require explicit page credentials (no hardcoded tenant default)
+    if (!targetPageId || !targetToken) {
+      return res.status(400).json({
+        success: false,
+        error: "صفحة الفيسبوك (pageId) وتوكن الوصول (pageAccessToken) مطلوبان.",
+      });
     }
 
     const result = await handleMetaAutoReply({
@@ -895,13 +960,13 @@ app.get(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/facebo
   const token = query["hub.verify_token"] || hub.verify_token || query["hub[verify_token]"] || query.verify_token || query.token || urlParams.get("hub.verify_token") || urlParams.get("verify_token");
   const challenge = query["hub.challenge"] || hub.challenge || query["hub[challenge]"] || query.challenge || urlParams.get("hub.challenge") || urlParams.get("challenge");
 
-  console.log(`[Meta Webhook GET Verification] Full Query:`, query, `| Mode: ${mode}, Token: ${token}, Challenge: ${challenge}`);
+  console.log(`[Meta Webhook GET Verification] Mode: ${mode || "n/a"}`);
 
   const EXPECTED_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || "";
 
   if (challenge) {
     if (token && token !== EXPECTED_TOKEN) {
-      console.warn(`[Meta Webhook] Token mismatch: received "${token}" vs expected "${EXPECTED_TOKEN}"`);
+      console.warn(`[Meta Webhook] Token mismatch: verification failed`);
     }
     console.log(`[Meta Webhook Verification SUCCESS] Returning challenge: ${challenge}`);
     return res.status(200).send(String(challenge));
@@ -922,13 +987,13 @@ app.post(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/faceb
 
   try {
     const body = req.body;
-    console.log("[Meta Webhook Incoming POST Event]:", JSON.stringify(body, null, 2));
+    console.log("[Meta Webhook] Incoming POST event");
 
     const targetToken = activeMetaPageAccessToken || process.env.META_PAGE_ACCESS_TOKEN;
 
     if (body?.object === "page" && Array.isArray(body.entry)) {
       for (const entry of body.entry) {
-        const pageId = entry.id || "1303288339529348";
+        const pageId = entry.id || "";
 
         // 1. Process Page Feed Comments
         if (Array.isArray(entry.changes)) {
@@ -6486,8 +6551,23 @@ app.post(
   }
 );
 
+// ============================================================
+// INTEGRATION FEATURE FLAGS
+// ============================================================
+// Production integrations must not activate merely because
+// credentials exist. Each integration is gated by an explicit
+// feature flag that defaults to fail-safe (disabled).
+// ============================================================
+const INTEGRATION_FLAGS = {
+  telegram: String(process.env.ENABLE_TELEGRAM || "").toLowerCase() === "true",
+  meta: String(process.env.ENABLE_META || "").toLowerCase() === "true",
+  smtp: String(process.env.ENABLE_SMTP || "").toLowerCase() === "true",
+  externalCrm: String(process.env.ENABLE_EXTERNAL_CRM || "").toLowerCase() === "true",
+  n8n: String(process.env.ENABLE_N8N || "").toLowerCase() === "true",
+};
+
 // Telegram Polling Engine for Real-Time Telegram Response
-let isBotEnabled = true;
+let isBotEnabled = INTEGRATION_FLAGS.telegram;
 let isPollingActive = false;
 let lastUpdateOffset = 0;
 
@@ -7527,7 +7607,9 @@ const handleFacebookVerification = (req: express.Request, res: express.Response)
   const token = req.query["hub.verify_token"] || req.query["verify_token"];
   const challenge = req.query["hub.challenge"] || req.query["challenge"];
 
-  console.log("[Facebook Webhook Verification GET Request]:", req.query);
+  // Sanitized: log verification intent without echoing the raw query
+  // (which may contain hub.verify_token / challenge values).
+  console.log(`[Facebook Webhook Verification GET Request] mode=${mode || "n/a"}`);
 
   if (mode === "subscribe" && challenge) {
     console.log("[Facebook Webhook Verified Successfully!] Challenge:", challenge);
@@ -7550,7 +7632,8 @@ app.get("/webhook/facebook", handleFacebookVerification);
 // POST Facebook Webhook Receiver (Incoming Messages)
 const handleFacebookMessage = async (req: express.Request, res: express.Response) => {
   const body = req.body;
-  console.log("[Facebook Webhook Received POST]:", JSON.stringify(body));
+  // Sanitized: never log the full webhook body (may contain tokens / PII).
+  console.log("[Facebook Webhook Received POST] event payload received");
 
   if (body.object === "page") {
     for (const entry of body.entry || []) {
@@ -8181,6 +8264,15 @@ async function startServer() {
   console.log("🦊 FOX AI AGENCY BOOT");
   console.log("==============================================");
 
+  // Validate environment variables before starting (fail-closed in production)
+  const envValidation = printEnvValidation();
+  if (!envValidation.valid && envValidation.isProduction) {
+    console.error(
+      "❌ [FOX Boot] Production environment validation failed. Missing required variables. Exiting."
+    );
+    process.exit(1);
+  }
+
   const runtimeReadiness =
     printFoxRuntimeReadiness();
 
@@ -8197,6 +8289,14 @@ async function startServer() {
   // Secure Agency Telegram startup
   // --------------------------------------------------------
   await hydrateAgencyTelegramToken();
+
+  if (
+    !INTEGRATION_FLAGS.telegram
+  ) {
+    console.warn(
+      "⚠️ [FOX Boot] Telegram integration is DISABLED (ENABLE_TELEGRAM != true). Polling will not start."
+    );
+  }
 
   if (
     activeTelegramToken &&
@@ -8256,8 +8356,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🦊 FOX AI AGENCY Server running on http://0.0.0.0:${PORT}`);
+  const listenHost = process.env.FOX_LISTEN_HOST || "127.0.0.1";
+  app.listen(PORT, listenHost, () => {
+    console.log(`🦊 FOX AI AGENCY Server running on http://${listenHost}:${PORT}`);
   });
 }
 
