@@ -8,6 +8,13 @@ import { sharedMemoryService } from "./sharedMemoryService";
 import { creditService } from "./creditService";
 import { couponService } from "./couponService";
 import { workspaceCrmService } from "./workspaceCrmService";
+import {
+  hasBookingDateSignal,
+  hasBookingTimeSignal,
+  parseBookingDateTime,
+  parseBookingIdentity,
+} from "./bookingDateTimeParser";
+import { answerTenantBusinessInquiry } from "./tenantBusinessInquiry";
 
 export interface AiAgentConfig {
   agentName?: string;
@@ -40,6 +47,7 @@ export interface WorkspaceContext {
   industry?: string;
   creditBalance?: number;
   aiSettings?: AiAgentConfig;
+  businessDescription?: string;
   knowledgeBase?: { question: string; answer: string; approved?: boolean }[];
   doctors?: { name: string; specialty: string; slots?: string[]; consultationFeeEGP?: number }[];
   menu?: { name: string; category: string; price: number; description?: string; available?: boolean; alternativeItemName?: string; alternativeNotes?: string }[];
@@ -48,6 +56,18 @@ export interface WorkspaceContext {
   courseReviews?: { studentName: string; courseName: string; rating: number; comment: string; reply?: string }[];
   products?: { name: string; price: number; stock?: number; available?: boolean; alternativeItemName?: string; alternativeNotes?: string }[];
   clinicServices?: { name: string; price: number; durationMinutes: number; description?: string; available?: boolean }[];
+  coupons?: {
+    code: string;
+    discountType: string;
+    discountValue: number;
+    condition?: string;
+    isActive?: boolean;
+    aiCanUse?: boolean;
+    validFrom?: string;
+    validUntil?: string;
+    usageLimit?: number;
+    usageCount?: number;
+  }[];
   googleSheetsAccessToken?: string;
   crmSpreadsheetId?: string;
   externalCrmWebhookUrl?: string;
@@ -1976,7 +1996,7 @@ ${industryContext || "Standard business inquiry catalog."}
         String(message || "").trim();
 
       const bookingFlowIntent =
-        /(عاوز\s*احجز|عاوز\s*أحجز|عايز\s*احجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|book\s+an?\s*appointment|book\s+appointment|reserve)/i.test(
+        /(عاوز\s*احجز|عاوز\s*أحجز|عايز\s*احجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|حجز\s*موعد(?:\s*جديد)?|book\s+an?\s*appointment|book\s+appointment|book\s+new\s+appointment|reserve)/i.test(
           bookingFlowMessage
         );
 
@@ -1989,14 +2009,10 @@ ${industryContext || "Standard business inquiry catalog."}
         );
 
       const explicitDate =
-        /(\d{1,2})\s+(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)|(\d{4}-\d{2}-\d{2})|بكره|بكرة|غدا|غداً/i.test(
-          bookingFlowMessage
-        );
+        hasBookingDateSignal(bookingFlowMessage);
 
       const explicitTime =
-        /الساعة\s*\d{1,2}|(\d{1,2}):(\d{2})\s*(AM|PM)|\d{1,2}\s*(صباح|ظهر|مساء)/i.test(
-          bookingFlowMessage
-        );
+        hasBookingTimeSignal(bookingFlowMessage);
 
       const lastBookingBot =
         bookingFlowCtx.messages
@@ -2224,7 +2240,7 @@ ${industryContext || "Standard business inquiry catalog."}
     // =========================================================
     if (workspace?.id && params.sessionId) {
       const newBookingIntent =
-        /(عاوز\s*أحجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|book\s+an?\s*appointment|book\s+appointment|reserve)/i.test(
+        /(عاوز\s*أحجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|حجز\s*موعد(?:\s*جديد)?|book\s+an?\s*appointment|book\s+appointment|book\s+new\s+appointment|reserve)/i.test(
           message
         );
 
@@ -2311,14 +2327,10 @@ ${industryContext || "Standard business inquiry catalog."}
             String(message || "").trim();
 
           const retryExplicitDate =
-            /(\d{1,2})\s+(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)|(\d{4}-\d{2}-\d{2})|بكره|بكرة|غدا|غداً/i.test(
-              retryMessage
-            );
+            hasBookingDateSignal(retryMessage);
 
           const retryExplicitTime =
-            /الساعة\s*\d{1,2}|(\d{1,2}):(\d{2})\s*(AM|PM)|\d{1,2}\s*(صباح|ظهر|مساء)/i.test(
-              retryMessage
-            );
+            hasBookingTimeSignal(retryMessage);
 
           if (
             !retryExplicitDate ||
@@ -2492,45 +2504,12 @@ ${industryContext || "Standard business inquiry catalog."}
           const identityMessage =
             String(message || "").trim();
 
-          // Extract phone independently from the message so name + phone
-          // can safely exist on the same line.
-          const phoneMatch =
-            identityMessage.match(
-              /(?:\+?\d[\d\s-]{8,16}\d)/
-            );
-
-          const phone =
-            phoneMatch
-              ? phoneMatch[0].replace(/\D/g, "")
-              : "";
-
-          // Remove the phone and common Arabic/English identity labels.
-          // Examples supported:
-          // "أحمد محمد 01012345678"
-          // "الاسم أحمد محمد ورقم الموبايل 01012345678"
-          // "اسمي أحمد محمد ورقمي 01012345678"
-          let customerName =
-            identityMessage;
-
-          if (phoneMatch) {
-            customerName =
-              customerName.replace(phoneMatch[0], " ");
-          }
-
-          customerName =
-            customerName
-              .replace(
-                /(?:الاسم|اسمي|اسم\s*صاحب\s*الحجز|name)\s*[:：-]?/gi,
-                " "
-              )
-              .replace(
-                /(?:و?رقم\s*(?:الموبايل|الموبيل|الهاتف|التليفون)|و?رقمي|phone(?:\s*number)?)\s*[:：-]?/gi,
-                " "
-              )
-              .replace(/\s+/g, " ")
-              .trim()
-              .replace(/^(?:و|هو|هي)\s+/i, "")
-              .trim();
+          // Name and phone are parsed together so a follow-up such as
+          // "hesham 01555193491" cannot lose the original booking request.
+          const {
+            name: customerName,
+            phone,
+          } = parseBookingIdentity(identityMessage);
 
           console.log(
             `🪪 [FOX Booking Identity] Workspace=${workspace.id} | Name=${customerName || "NONE"} | PhoneCaptured=${!!phone}`
@@ -2543,7 +2522,7 @@ ${industryContext || "Standard business inquiry catalog."}
               .find(
                 (m) =>
                   m.sender === "user" &&
-                  /(عاوز\s*أحجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|book\s+an?\s*appointment|reserve)/i.test(
+                  /(عاوز\s*أحجز|عايز\s*أحجز|أريد\s*حجز|اريد\s*حجز|احجز|أحجز|حجز\s*موعد(?:\s*جديد)?|book\s+an?\s*appointment|book\s+appointment|book\s+new\s+appointment|reserve)/i.test(
                     m.text || ""
                   )
               )
@@ -2554,90 +2533,12 @@ ${industryContext || "Standard business inquiry catalog."}
             customerName.length >= 2 &&
             originalBookingRequest
           ) {
-            // -------------------------------
-            // Parse Arabic / English date
-            // -------------------------------
-            const arabicMonths: Record<string, number> = {
-              "يناير": 1,
-              "فبراير": 2,
-              "مارس": 3,
-              "أبريل": 4,
-              "ابريل": 4,
-              "مايو": 5,
-              "يونيو": 6,
-              "يوليو": 7,
-              "أغسطس": 8,
-              "اغسطس": 8,
-              "سبتمبر": 9,
-              "أكتوبر": 10,
-              "اكتوبر": 10,
-              "نوفمبر": 11,
-              "ديسمبر": 12
-            };
-
-            let bookingDate = "";
-            let bookingTime = "";
-
-            const now = new Date();
-            const currentYear = now.getFullYear();
-
-            // Arabic date: 22 أغسطس
-            const dateMatch =
-              originalBookingRequest.match(
-                /(\d{1,2})\s+(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)/i
-              );
-
-            if (dateMatch) {
-              const day = Number(dateMatch[1]);
-              const month =
-                arabicMonths[dateMatch[2]];
-
-              if (month) {
-                bookingDate =
-                  `${currentYear}-` +
-                  `${String(month).padStart(2, "0")}-` +
-                  `${String(day).padStart(2, "0")}`;
-              }
-            }
-
-            // ------------------------------------------------
-            // Parse appointment TIME only from an explicit time phrase.
-            // Never mistake the DAY number (e.g. 23 August) for the hour.
-            // Examples:
-            // الساعة 1 ظهراً  -> 01:00 PM
-            // الساعة 10 صباحاً -> 10:00 AM
-            // 2:30 مساءً       -> 02:30 PM
-            // ------------------------------------------------
-            const timeMatch =
-              originalBookingRequest.match(
-                /(?:الساعة\s+|الساعة\s*|at\s+)(\d{1,2})(?::(\d{2}))?\s*(صباحاً|صباحا|صباحًا|صباح|ظهراً|ظهرا|ظهرًا|ظهر|مساءً|مساءا|مساء|am|pm)/i
-              );
-
-            if (timeMatch) {
-              let hour12 = Number(timeMatch[1]);
-              const minute = Number(timeMatch[2] || 0);
-
-              const period =
-                String(timeMatch[3] || "").toLowerCase();
-
-              if (
-                hour12 < 1 ||
-                hour12 > 12 ||
-                minute < 0 ||
-                minute > 59
-              ) {
-                bookingTime = "";
-              } else {
-                const isPM =
-                  /ظهر|مساء|pm/.test(period);
-
-                const suffix = isPM ? "PM" : "AM";
-
-                bookingTime =
-                  `${String(hour12).padStart(2, "0")}:` +
-                  `${String(minute).padStart(2, "0")} ${suffix}`;
-              }
-            }
+            const {
+              date: bookingDate,
+              time: bookingTime,
+            } = parseBookingDateTime(
+              originalBookingRequest,
+            );
 
             if (!bookingDate || !bookingTime) {
               const msg =
@@ -3114,7 +3015,7 @@ ${industryContext || "Standard business inquiry catalog."}
               params.sessionId,
               {
                 sender: "bot",
-                text: confirmation,
+                text: confirmation + "\nBOOKING_STATE:COMPLETED",
                 time: new Date().toISOString(),
                 agentRole: "Sales"
               }
@@ -3422,6 +3323,55 @@ ${industryContext || "Standard business inquiry catalog."}
       }
     }
 
+    // High-frequency factual questions are answered deterministically from
+    // the tenant-scoped runtime catalog. This path intentionally runs after
+    // booking/coupon state handling and before the LLM/fallback engine, so a
+    // completed booking's next message is classified as a fresh intent and
+    // can never be hijacked by a generic welcome.
+    const tenantBusinessAnswer = answerTenantBusinessInquiry(
+      message,
+      {
+        businessName: workspace.name,
+        businessDescription: workspace.businessDescription,
+        workingHours: workspace.aiSettings?.workingHours,
+        clinicServices: workspace.clinicServices,
+        doctors: workspace.doctors,
+        coupons: workspace.coupons,
+        knowledgeBase: workspace.knowledgeBase,
+      },
+    );
+
+    if (tenantBusinessAnswer) {
+      if (workspace.id && params.sessionId) {
+        await sharedMemoryService.appendMessage(
+          workspace.id,
+          params.sessionId,
+          {
+            sender: "user",
+            text: message,
+            time: new Date().toISOString(),
+          },
+        );
+        await sharedMemoryService.appendMessage(
+          workspace.id,
+          params.sessionId,
+          {
+            sender: "bot",
+            text: tenantBusinessAnswer.response,
+            time: new Date().toISOString(),
+          },
+        );
+      }
+
+      return {
+        response: tenantBusinessAnswer.response,
+        aiResponse: tenantBusinessAnswer.response,
+        detectedLanguage: messageLang,
+        source: "firestore:tenant_business_inquiry",
+        suggestedActions: [],
+      };
+    }
+
     const agentRole: "Sales" | "Support" | "Marketing" =
       forcedBookingSales
         ? "Sales"
@@ -3535,37 +3485,13 @@ DATE SAFETY RULES:
     // OpenRouter is the primary provider.
     // Gemini remains available as a fallback.
     if (!openRouter && !ai) {
-      const msgLower = message.toLowerCase();
       const isAr = messageLang === "ar";
       const businessName = workspace.name || "Fox Business";
       const agentName = workspace.aiSettings?.agentName || `${businessName} AI Assistant`;
 
-      let responseText = "";
-      if (isAr) {
-        responseText = `أهلاً بك في ${businessName}! أنا ${agentName}، المساعد الذكي الخاص بالنشاط. `;
-        if (
-          msgLower.includes("سعر") ||
-          msgLower.includes("كام") ||
-          msgLower.includes("بكام") ||
-          msgLower.includes("منيو") ||
-          msgLower.includes("دكتور")
-        ) {
-          responseText += `إليك تفاصيل الخدمات والأسعار المتاحة لدينا بالجنيه المصري (EGP). يسعدنا تزويدك بأي معلومات إضافية تحتاجها!`;
-        } else if (msgLower.includes("حجز") || msgLower.includes("موعد") || msgLower.includes("احجز")) {
-          responseText += `يمكنني مساعدتك في تسجيل حجزك فوراً! يرجى تزويدي باسمك ورقم هاتفك والموعد المفضل وسأقوم بحفظه في الـ CRM.`;
-        } else {
-          responseText += `كيف يمكنني مساعدتك اليوم؟ يمكنك الاستفسار عن الخدمات والأسعار أو طلب المواعيد.`;
-        }
-      } else {
-        responseText = `Hello! Welcome to ${businessName}. I am ${agentName}. `;
-        if (msgLower.includes("price") || msgLower.includes("cost") || msgLower.includes("menu") || msgLower.includes("doctor")) {
-          responseText += `Here are our available services and catalog prices in EGP. Feel free to ask any questions!`;
-        } else if (msgLower.includes("book") || msgLower.includes("appointment")) {
-          responseText += `I can help you book an appointment! Please provide your name, phone number, and preferred slot for CRM registration.`;
-        } else {
-          responseText += `How may I assist you today? You can ask about our catalog, pricing, or book an appointment.`;
-        }
-      }
+      const responseText = isAr
+        ? `أنا ${agentName} الخاص بـ ${businessName}. لا تتوفر لدي معلومة معتمدة للإجابة عن السؤال الحالي، ويمكنني تحويل استفسارك لفريق العمل.`
+        : `I am ${agentName} for ${businessName}. I do not have approved information for this question, and I can refer your inquiry to the team.`;
 
       return {
         response: responseText,

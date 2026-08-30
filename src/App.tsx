@@ -39,7 +39,11 @@ const useClientBrowserHardening = () => {
 
 import { AppProvider, useApp } from "./context/AppContext";
 import { Navbar } from "./components/Navbar";
-import { Sidebar, ViewTab } from "./components/Sidebar";
+import { Sidebar } from "./components/Sidebar";
+import {
+  resolveAuthorizedView,
+  type ViewTab,
+} from "./security/appAuthorization";
 import { Breadcrumbs } from "./components/Breadcrumbs";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { LoginModal } from "./components/LoginModal";
@@ -225,14 +229,38 @@ const PlanFeatureGuard: React.FC<{
 };
 
 const AppContent: React.FC = () => {
-  const { currentUser } = useApp();
-  const [activeTab, setActiveTab] = useState<ViewTab>("admin_dashboard");
+  const {
+    currentUser,
+    authHydrated,
+    workspacesLoading,
+    workspacesError,
+  } = useApp();
+  const [requestedView, setRequestedView] = useState<unknown>(() =>
+    localStorage.getItem("fox_active_view") || "",
+  );
+  const activeTab: ViewTab = currentUser
+    ? resolveAuthorizedView(currentUser.role, requestedView)
+    : "client_dashboard";
+
+  const navigateTo = React.useCallback(
+    (requested: unknown) => {
+      if (!currentUser) return;
+
+      const authorized = resolveAuthorizedView(
+        currentUser.role,
+        requested,
+      );
+      setRequestedView(authorized);
+      localStorage.setItem("fox_active_view", authorized);
+    },
+    [currentUser],
+  );
 
   useEffect(() => {
     const handleFoxNavigate = (event: Event) => {
       const detail =
         (event as CustomEvent<{
-          tab?: ViewTab;
+          tab?: unknown;
           conversationId?: string;
         }>).detail;
 
@@ -240,7 +268,7 @@ const AppContent: React.FC = () => {
         return;
       }
 
-      setActiveTab(detail.tab);
+      navigateTo(detail.tab);
     };
 
     window.addEventListener(
@@ -254,26 +282,63 @@ const AppContent: React.FC = () => {
         handleFoxNavigate
       );
     };
-  }, []);
+  }, [navigateTo]);
 
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isTourManualOpen, setIsTourManualOpen] = useState(false);
 
   React.useEffect(() => {
-    if (currentUser && currentUser.role !== "super_admin" && activeTab.startsWith("admin_")) {
-      setActiveTab("client_dashboard");
+    if (!currentUser) return;
+
+    const authorized = resolveAuthorizedView(
+      currentUser.role,
+      requestedView,
+    );
+    if (authorized !== requestedView) {
+      setRequestedView(authorized);
     }
-  }, [currentUser, activeTab]);
+    localStorage.setItem("fox_active_view", authorized);
+  }, [currentUser, requestedView]);
+
+  if (!authHydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-4 text-sm font-semibold shadow-xl">
+          Restoring secure session...
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return <AuthPortal />;
+  }
+
+  if (workspacesLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-4 text-sm font-semibold shadow-xl">
+          Loading authorized workspaces...
+        </div>
+      </div>
+    );
+  }
+
+  if (workspacesError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="max-w-md rounded-2xl border border-rose-900/50 bg-slate-900 px-6 py-5 text-center text-sm font-semibold shadow-xl">
+          Authorized workspaces could not be loaded. Please refresh or sign in again.
+        </div>
+      </div>
+    );
   }
 
   const renderMainView = () => {
     switch (activeTab) {
       // Super Admin Views
       case "admin_dashboard":
-        return <AdminDashboard onNavigate={setActiveTab} />;
+        return <AdminDashboard onNavigate={navigateTo} />;
       case "admin_clients":
         return <AdminClientManager />;
       case "admin_plans":
@@ -299,7 +364,7 @@ const AppContent: React.FC = () => {
       case "client_dashboard":
         return (
           <WorkspaceGuard>
-            <ClientDashboard onNavigate={setActiveTab} />
+            <ClientDashboard onNavigate={navigateTo} />
           </WorkspaceGuard>
         );
       case "client_crm":
@@ -432,7 +497,7 @@ const AppContent: React.FC = () => {
         if (currentUser.role !== "super_admin") {
           return (
             <WorkspaceGuard>
-              <ClientDashboard onNavigate={setActiveTab} />
+              <ClientDashboard onNavigate={navigateTo} />
             </WorkspaceGuard>
           );
         }
@@ -446,7 +511,7 @@ const AppContent: React.FC = () => {
         if (currentUser.role !== "super_admin") {
           return (
             <WorkspaceGuard>
-              <ClientDashboard onNavigate={setActiveTab} />
+              <ClientDashboard onNavigate={navigateTo} />
             </WorkspaceGuard>
           );
         }
@@ -464,7 +529,13 @@ const AppContent: React.FC = () => {
         );
 
       default:
-        return <AdminDashboard onNavigate={setActiveTab} />;
+        return currentUser.role === "super_admin" ? (
+          <AdminDashboard onNavigate={navigateTo} />
+        ) : (
+          <WorkspaceGuard>
+            <ClientDashboard onNavigate={navigateTo} />
+          </WorkspaceGuard>
+        );
     }
   };
 
@@ -477,9 +548,9 @@ const AppContent: React.FC = () => {
         />
 
         <div className="flex">
-          <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+          <Sidebar activeTab={activeTab} setActiveTab={navigateTo} />
           <main className="flex-1 p-3 sm:p-6 lg:p-8 w-full max-w-[1750px] mx-auto overflow-x-hidden space-y-5 sm:space-y-6">
-            <Breadcrumbs activeTab={activeTab} onNavigate={setActiveTab} />
+            <Breadcrumbs activeTab={activeTab} onNavigate={navigateTo} />
             {renderMainView()}
           </main>
         </div>
@@ -487,7 +558,7 @@ const AppContent: React.FC = () => {
         {/* Guided Onboarding Tour Walkthrough */}
         <OnboardingTour
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={navigateTo}
           isOpenManual={isTourManualOpen}
           onCloseManual={() => setIsTourManualOpen(false)}
         />

@@ -1,4 +1,5 @@
 import { adminDb } from "./firebaseAdmin";
+import { formatDateKeyInTimeZone } from "../utils/dateOnly";
 
 function sanitizeForFirestore<T>(value: T): T {
   if (value === undefined || value === null) {
@@ -108,10 +109,53 @@ const setDoc = async (
   return ref.set(data);
 };
 
+async function syncRootCrmLeadCompatibility(
+  leadId: string,
+  lead: Record<string, any>
+) {
+  try {
+    await setDoc(
+      doc("crmLeads", leadId),
+      sanitizeForFirestore(lead),
+      { merge: true }
+    );
+  } catch (error) {
+    console.warn(
+      `[FOX CRM] Root compatibility sync failed for lead ${leadId}:`,
+      error
+    );
+  }
+}
+
 const updateDoc = async (
   ref: FirebaseFirestore.DocumentReference,
   data: any
 ) => ref.update(data);
+
+async function syncRootAppointmentCompatibility(
+  appointmentId: string,
+  data: Record<string, any>,
+  operation: "set" | "update"
+) {
+  try {
+    if (operation === "set") {
+      await setDoc(
+        doc("appointments", appointmentId),
+        sanitizeForFirestore(data)
+      );
+    } else {
+      await updateDoc(
+        doc("appointments", appointmentId),
+        sanitizeForFirestore(data)
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[FOX Appointments] Root compatibility sync failed for appointment ${appointmentId}:`,
+      error
+    );
+  }
+}
 
 
 const makeId = (prefix: string) =>
@@ -154,7 +198,7 @@ export const workspaceDataService = {
       couponRedemptionId?: string;
     }
   ) {
-    const todayISO = new Date().toISOString().slice(0, 10);
+    const todayISO = formatDateKeyInTimeZone(new Date());
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(data.date) ||
@@ -210,14 +254,34 @@ export const workspaceDataService = {
       updatedAt: new Date().toISOString(),
     });
 
-    // Tenant-isolated collection
-    await setDoc(
-      doc( "workspaces", workspaceId, "appointments", id),
-      appointment
-    );
+    const appointmentRef = adminDb
+      .collection("workspaces")
+      .doc(workspaceId)
+      .collection("appointments")
+      .doc(id);
+    const slotQuery = adminDb
+      .collection("workspaces")
+      .doc(workspaceId)
+      .collection("appointments")
+      .where("date", "==", data.date)
+      .where("time", "==", data.time);
 
-    // Compatibility with current dashboard
-    await setDoc(doc( "appointments", id), appointment);
+    // The earlier availability check is advisory. This transaction is the
+    // authoritative slot claim and closes the concurrent/delivered-twice race.
+    await adminDb.runTransaction(async (transaction) => {
+      const slotSnapshot = await transaction.get(slotQuery);
+      const activeSlotExists = slotSnapshot.docs.some(
+        (snapshotDoc) => snapshotDoc.data()?.status !== "Cancelled"
+      );
+      if (activeSlotExists) {
+        throw new Error("FOX_APPOINTMENT_SLOT_UNAVAILABLE");
+      }
+      transaction.set(appointmentRef, appointment);
+    });
+
+    // Legacy root mirror is compatibility-only. The nested transaction above is
+    // authoritative and must remain successful if this mirror is unavailable.
+    await syncRootAppointmentCompatibility(id, appointment, "set");
 
     return appointment;
   },
@@ -227,6 +291,38 @@ export const workspaceDataService = {
   ) {
     const q = query(
       collection( "clinicServices"),
+      where("workspaceId", "==", workspaceId)
+    );
+
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
+  async getKnowledgeFacts(
+    workspaceId: string
+  ) {
+    const q = query(
+      collection("knowledgeFacts"),
+      where("workspaceId", "==", workspaceId)
+    );
+
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
+  async getCoupons(
+    workspaceId: string
+  ) {
+    const q = query(
+      collection("coupons"),
       where("workspaceId", "==", workspaceId)
     );
 
@@ -282,10 +378,12 @@ export const workspaceDataService = {
       payload
     );
 
-    // Compatibility collection used by the current dashboard.
-    await updateDoc(
-      doc( "appointments", appointmentId),
-      payload
+    // Legacy root mirror is compatibility-only and cannot fail the nested
+    // financial update (for example after a successful coupon redemption).
+    await syncRootAppointmentCompatibility(
+      appointmentId,
+      payload,
+      "update"
     );
 
     return payload;
@@ -296,7 +394,7 @@ export const workspaceDataService = {
     date: string,
     time: string
   ) {
-    const todayISO = new Date().toISOString().slice(0, 10);
+    const todayISO = formatDateKeyInTimeZone(new Date());
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
@@ -412,6 +510,16 @@ export const workspaceDataService = {
           { merge: true }
         );
 
+        await syncRootCrmLeadCompatibility(
+          canonicalId,
+          {
+            ...existingLead,
+            ...updates,
+            id: canonicalId,
+            workspaceId,
+          }
+        );
+
         return {
           ...existingLead,
           ...updates,
@@ -474,6 +582,16 @@ export const workspaceDataService = {
           { merge: true }
         );
 
+        await syncRootCrmLeadCompatibility(
+          existingDoc.id,
+          {
+            ...existingLead,
+            ...updates,
+            id: existingDoc.id,
+            workspaceId,
+          }
+        );
+
         return {
           ...existingLead,
           ...updates,
@@ -523,6 +641,16 @@ export const workspaceDataService = {
           existingDoc.ref,
           updates,
           { merge: true }
+        );
+
+        await syncRootCrmLeadCompatibility(
+          existingDoc.id,
+          {
+            ...existingLead,
+            ...updates,
+            id: existingDoc.id,
+            workspaceId,
+          }
         );
 
         return {
@@ -577,11 +705,8 @@ export const workspaceDataService = {
       lead
     );
 
-    // Legacy root compatibility.
-    await setDoc(
-      doc( "crmLeads", id),
-      lead
-    );
+    // Root compatibility used by the current dashboard.
+    await syncRootCrmLeadCompatibility(id, lead);
 
     return lead;
   },
@@ -616,7 +741,7 @@ export const workspaceDataService = {
       );
     }
 
-    const todayISO = new Date().toISOString().slice(0, 10);
+    const todayISO = formatDateKeyInTimeZone(new Date());
 
     return snapshot.docs
       .map((d) => d.data())

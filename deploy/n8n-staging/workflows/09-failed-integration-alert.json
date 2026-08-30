@@ -1,0 +1,215 @@
+{
+  "name": "Failed Integration Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-integration-failed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "cc8a4291-d672-4e0f-b9f1-b6c6c0816792",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "e365b289-f97a-4673-a0ae-459ac8764bf4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "7a78cffe-83e5-495c-886f-e014694edff7",
+              "leftValue": "={{ $env.FOX_N8N_SHARED_SECRET && $json.headers?.['x-fox-n8n-secret'] === $env.FOX_N8N_SHARED_SECRET ? $env.FOX_N8N_SHARED_SECRET : 'NO' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ec59c45c-b2b6-49b2-8c46-ae5c2aa1a301",
+      "name": "Verify FOX Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6637e218-ab74-4200-a527-e82948483178",
+              "name": "workflow",
+              "value": "Failed Integration Alert",
+              "type": "string"
+            },
+            {
+              "id": "40ca84ba-778f-4537-b3ac-8a0b9159127a",
+              "name": "event",
+              "value": "integration.failed",
+              "type": "string"
+            },
+            {
+              "id": "adbb02d1-2cee-4679-aee7-345117a639d4",
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1c32f219-66c8-4c7e-9132-0a5f7ed9d8b6",
+      "name": "Tenant Event Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL + '/api/automation/events' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "eb1745ea-a781-44a0-8e0e-4680d53b59c7",
+      "name": "FOX Action (configure endpoint)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        -80
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, workflow: $json.workflow, workspaceId: $json.workspaceId } }}",
+        "options": {}
+      },
+      "id": "60d0473c-bb19-4fe7-97f6-f7c1cc7abf9f",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'forbidden' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "e1123ae4-f7ed-4677-8cca-3889fe964073",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        160
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX Secret": {
+      "main": [
+        [
+          {
+            "node": "Tenant Event Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tenant Event Envelope": {
+      "main": [
+        [
+          {
+            "node": "FOX Action (configure endpoint)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Action (configure endpoint)": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "a1023e7d-2306-4278-9d43-a5e43f974bc4",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

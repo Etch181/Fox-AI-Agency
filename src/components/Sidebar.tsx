@@ -5,6 +5,7 @@ import {
   getIndustryModuleName,
 } from "../services/entitlementService";
 import { useTranslation } from "../services/LanguageService";
+import type { ViewTab } from "../security/appAuthorization";
 import {
   BookOpen,
   LayoutDashboard,
@@ -37,40 +38,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 
-export type ViewTab =
-  | "admin_dashboard"
-  | "admin_clients"
-  | "admin_plans"
-  | "admin_payments"
-  | "admin_codes"
-  | "admin_telegram"
-  | "admin_n8n"
-  | "admin_tickets"
-  | "admin_audit_logs"
-  | "admin_gemini_status"
-  | "admin_ratings"
-  | "client_dashboard"
-  | "client_crm"
-  | "client_industry_module"
-  | "client_appointments"
-  | "client_complaints"
-  | "client_ai_settings"
-  | "client_telegram"
-  | "client_whatsapp"
-  | "client_live_simulator"
-  | "client_subscription"
-  | "client_n8n"
-  | "client_staff"
-  | "client_tickets"
-  | "client_promotions"
-  | "client_order_verification"
-  | "client_service_ratings"
-  | "client_unified_inbox"
-  | "client_knowledge_builder"
-  | "client_integrations"
-  | "client_fox_advisor"
-  | "client_ai_analytics"
-  | "client_marketing_agent";
+export type { ViewTab } from "../security/appAuthorization";
 
 interface SidebarProps {
   activeTab: ViewTab;

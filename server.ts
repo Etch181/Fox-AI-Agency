@@ -34,14 +34,17 @@ import { aiAgentService } from "./src/services/aiAgentService";
 import { sharedMemoryService } from "./src/services/sharedMemoryService";
 import { conversationService } from "./src/services/conversationService";
 import { workspaceCrmService } from "./src/services/workspaceCrmService";
+import { workspaceDataService } from "./src/services/workspaceDataService";
 import { crmEventService } from "./src/services/crmEventService";
 import { validateExternalCrmWebhookUrl } from "./src/services/crmService";
 import { calculateEntitlementRenewal } from "./src/utils/entitlementRenewal";
 import { secureAsyncRoute } from "./src/utils/secureAsyncRoute";
+import { verifyMetaWebhookSignature } from "./src/utils/metaWebhookSignature";
 import {
   authoritativeWorkspaceFromDocument,
   authoritativeWorkspaceToAdminDto,
   authoritativeWorkspaceToClientDto,
+  authoritativeWorkspaceToStaffDto,
   refreshAuthoritativeWorkspaceCache,
   sanitizeAuthoritativeWorkspaceForRuntime,
 } from "./src/services/workspaceTrust";
@@ -58,6 +61,12 @@ import {
 import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
 import { printEnvValidation } from "./src/utils/envValidation";
+import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
+import {
+  normalizeRegistrationEmail,
+  normalizeRegistrationPhone,
+  registrationClaimId,
+} from "./src/security/registrationClaims";
 dotenv.config();
 
 // ============================================================
@@ -234,7 +243,12 @@ async function verifyAndMigrateWorkspacePassword(
 const app = express();
 const PORT = Number(process.env.FOX_INTERNAL_PORT || process.env.PORT || 3000);
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({
+  limit: "50mb",
+  verify: (req: any, _res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  },
+}));
 
 // Store generated OTP codes in memory for web/API verification
 const otpStore: Record<string, { code: string; expiresAt: number; ownerName?: string; workspaceName?: string }> = {};
@@ -962,38 +976,76 @@ app.get(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/facebo
 
   console.log(`[Meta Webhook GET Verification] Mode: ${mode || "n/a"}`);
 
-  const EXPECTED_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || "";
+  const EXPECTED_TOKEN = String(
+    process.env.META_WEBHOOK_VERIFY_TOKEN || ""
+  ).trim();
 
-  if (challenge) {
-    if (token && token !== EXPECTED_TOKEN) {
-      console.warn(`[Meta Webhook] Token mismatch: verification failed`);
-    }
-    console.log(`[Meta Webhook Verification SUCCESS] Returning challenge: ${challenge}`);
-    return res.status(200).send(String(challenge));
+  if (!EXPECTED_TOKEN) {
+    console.warn("[Meta Webhook] Verification token is not configured");
+    return res.status(503).send("Meta webhook is not configured");
   }
 
-  if (mode === "subscribe") {
-    console.log("[Meta Webhook] Mode subscribe detected without challenge, returning OK");
-    return res.status(200).send("OK");
+  if (
+    mode !== "subscribe" ||
+    !challenge ||
+    !token || token !== EXPECTED_TOKEN
+  ) {
+    console.warn("[Meta Webhook] Verification rejected");
+    return res.status(403).send("Forbidden");
   }
 
-  return res.status(200).send("Meta Webhook Endpoint Active");
+  console.log("[Meta Webhook Verification SUCCESS]");
+  return res.status(200).send(String(challenge));
 });
 
 // Meta Webhook Event Handler (POST)
 app.post(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/facebook", "/webhook"], async (req, res) => {
-  // Always return 200 OK to Meta immediately
+  const signature = String(
+    req.headers["x-hub-signature-256"] || ""
+  );
+  const appSecret = String(
+    process.env.META_APP_SECRET || ""
+  );
+
+  if (!verifyMetaWebhookSignature(
+    (req as any).rawBody,
+    signature,
+    appSecret
+  )) {
+    console.warn("[Meta Webhook] Invalid or unavailable signature");
+    return res.sendStatus(appSecret ? 403 : 503);
+  }
+
+  // Acknowledge authentic Meta delivery immediately.
   res.status(200).send("EVENT_RECEIVED");
 
   try {
     const body = req.body;
     console.log("[Meta Webhook] Incoming POST event");
 
-    const targetToken = activeMetaPageAccessToken || process.env.META_PAGE_ACCESS_TOKEN;
-
     if (body?.object === "page" && Array.isArray(body.entry)) {
       for (const entry of body.entry) {
-        const pageId = entry.id || "";
+        const pageId = String(entry.id || "").trim();
+        const workspace = getWorkspaceByMetaPageId(pageId);
+
+        if (!workspace) {
+          console.warn(
+            `[Meta Webhook] Ignoring unmapped Page | Page=${pageId || "missing"}`
+          );
+          continue;
+        }
+
+        const targetToken = await getWorkspaceSecret(
+          String(workspace.id),
+          "facebookPageAccessToken"
+        );
+
+        if (!targetToken) {
+          console.warn(
+            `[Meta Webhook] Tenant Page token missing | Workspace=${workspace.id} | Page=${pageId}`
+          );
+          continue;
+        }
 
         // 1. Process Page Feed Comments
         if (Array.isArray(entry.changes)) {
@@ -1070,12 +1122,30 @@ app.post("/api/ai/build-system-prompt", (req, res) => {
 
 app.post(
   "/api/ai/reset-session",
-  secureAsyncRoute("AI session reset", async (req, res) => {
-    const { workspaceId, sessionId } = req.body;
-    if (workspaceId && sessionId) {
-      await sharedMemoryService.resetContext(workspaceId, sessionId);
+  authenticateFirebaseRequest,
+  secureAsyncRoute("AI session reset", async (req: any, res) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const sessionId = String(req.body?.sessionId || "").trim();
+    const workspace = requireAuthenticatedWorkspace(
+      req,
+      res,
+      workspaceId
+    );
+
+    if (!workspace) return;
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        code: "SESSION_ID_REQUIRED",
+        error: "sessionId is required",
+      });
     }
-    res.json({ success: true });
+
+    await sharedMemoryService.resetContext(
+      String(workspace.id),
+      sessionId
+    );
+    return res.json({ success: true });
   })
 );
 
@@ -2478,14 +2548,31 @@ app.get(
   "/api/agency/clients",
   authenticateFirebaseRequest,
   requireSuperAdmin,
-  (_req, res) => {
+  secureAsyncRoute("authoritative workspace directory", async (_req, res) => {
+    const snapshot = await adminDb.collection("workspaces").get();
+    const firestoreWorkspaces = snapshot.docs
+      .map((snapshotDoc) =>
+        authoritativeWorkspaceFromDocument(
+          snapshotDoc.id,
+          snapshotDoc.data() || {},
+        ),
+      )
+      .filter(
+        (workspace) => workspace?.id && workspace.status !== "deleted",
+      );
+
+    // Replace the process cache only after the authoritative read succeeds.
+    // A transient Firestore error therefore returns an error/loading state
+    // instead of permanently converting hydration into an empty directory.
+    registeredWorkspacesStore = firestoreWorkspaces;
+
     return res.json({
       success: true,
       clients: registeredWorkspacesStore.map(
         authoritativeWorkspaceToAdminDto
       ),
     });
-  }
+  }),
 );
 
 app.post(
@@ -3164,6 +3251,10 @@ declare global {
         workspaceId?: string | null;
         profile?: Record<string, any>;
       };
+      foxRegistrationIdentity?: {
+        uid: string;
+        email: string;
+      };
     }
   }
 }
@@ -3238,12 +3329,11 @@ async function authenticateFirebaseRequest(
 
     const profile: any =
       profileSnapshot.data() || {};
+    const authoritativeRole = resolveAuthoritativeUserRole(
+      profile.role,
+    );
 
-    if (
-      profile.role !== "super_admin" &&
-      profile.role !== "client_owner" &&
-      profile.role !== "staff"
-    ) {
+    if (!authoritativeRole) {
       return res.status(403).json({
         success: false,
         code: "INVALID_USER_ROLE",
@@ -3258,14 +3348,14 @@ async function authenticateFirebaseRequest(
         decoded.email ||
         profile.email ||
         null,
-      role: profile.role,
+      role: authoritativeRole,
       workspaceId:
         profile.workspaceId || null,
       profile,
     };
 
     console.log(
-      `🔐 [FOX Auth] Verified | UID=${uid} | Role=${profile.role} | Workspace=${profile.workspaceId || "AGENCY"}`
+      `🔐 [FOX Auth] Verified | UID=${uid} | Role=${authoritativeRole} | Workspace=${profile.workspaceId || "AGENCY"}`
     );
 
     return next();
@@ -3286,6 +3376,254 @@ async function authenticateFirebaseRequest(
     });
   }
 }
+
+async function authenticateFirebaseRegistrationRequest(
+  req: FoxAuthenticatedRequest,
+  res: any,
+  next: any,
+) {
+  try {
+    const authorization = String(req.headers?.authorization || "").trim();
+    if (!authorization.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        code: "AUTH_TOKEN_REQUIRED",
+        error: "Firebase authentication token is required",
+      });
+    }
+
+    const idToken = authorization.slice("Bearer ".length).trim();
+    if (!idToken) {
+      return res.status(401).json({
+        success: false,
+        code: "AUTH_TOKEN_REQUIRED",
+        error: "Firebase authentication token is required",
+      });
+    }
+
+    const decoded = await adminAuth.verifyIdToken(idToken);
+    const verifiedEmail = normalizeRegistrationEmail(decoded.email);
+    if (!verifiedEmail || decoded.email_verified !== true) {
+      return res.status(403).json({
+        success: false,
+        code: "REGISTRATION_EMAIL_NOT_VERIFIED",
+        error: "Email verification is required before workspace provisioning",
+      });
+    }
+    req.foxRegistrationIdentity = {
+      uid: decoded.uid,
+      email: verifiedEmail,
+    };
+    return next();
+  } catch (error: any) {
+    console.warn(
+      "[FOX Registration Auth] Token verification failed:",
+      error?.code || error?.message || error,
+    );
+    return res.status(401).json({
+      success: false,
+      code: "INVALID_AUTH_TOKEN",
+      error: "Authentication token is invalid or expired",
+    });
+  }
+}
+
+app.post(
+  "/api/registration/provision-workspace",
+  authenticateFirebaseRegistrationRequest,
+  secureAsyncRoute("trusted starter workspace provisioning", async (req, res) => {
+    const identity = req.foxRegistrationIdentity;
+    if (!identity) {
+      return res.status(401).json({
+        success: false,
+        code: "NOT_AUTHENTICATED",
+        error: "Authentication required",
+      });
+    }
+
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const workspaceName = String(req.body?.workspaceName || "").trim();
+    const ownerName = String(req.body?.ownerName || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    const industry = String(req.body?.industry || "").trim();
+    const supportedIndustries = new Set([
+      "Clinic",
+      "Pharmacy",
+      "Restaurant",
+      "Retail",
+      "Small Business",
+      "Course Center",
+    ]);
+
+    if (
+      !/^ws_[a-z0-9_-]{6,40}$/i.test(workspaceId) ||
+      !workspaceName ||
+      workspaceName.length > 160 ||
+      !ownerName ||
+      ownerName.length > 160 ||
+      !supportedIndustries.has(industry)
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "REGISTRATION_INPUT_INVALID",
+        error: "Registration data is invalid",
+      });
+    }
+
+    let normalizedPhone: string;
+    try {
+      normalizedPhone = normalizeRegistrationPhone(phone);
+    } catch {
+      return res.status(400).json({
+        success: false,
+        code: "REGISTRATION_PHONE_INVALID",
+        error: "A valid phone number is required",
+      });
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiryMillis = now.getTime() + 30 * 24 * 60 * 60 * 1000;
+    const workspaceRef = adminDb.collection("workspaces").doc(workspaceId);
+    const profileRef = adminDb.collection("users").doc(identity.uid);
+    const emailClaimRef = adminDb
+      .collection("trialClaims")
+      .doc(registrationClaimId("email", identity.email));
+    const phoneClaimRef = adminDb
+      .collection("trialClaims")
+      .doc(registrationClaimId("phone", normalizedPhone));
+
+    try {
+      const provisioned = await adminDb.runTransaction(async (transaction) => {
+        const existingProfile = await transaction.get(profileRef);
+        if (existingProfile.exists) {
+          const profileData = existingProfile.data() || {};
+          const existingWorkspaceId = String(profileData.workspaceId || "");
+          if (profileData.role !== "client_owner" || !existingWorkspaceId) {
+            throw new Error("REGISTRATION_PROFILE_CONFLICT");
+          }
+
+          const existingWorkspaceRef = adminDb
+            .collection("workspaces")
+            .doc(existingWorkspaceId);
+          const existingWorkspace = await transaction.get(existingWorkspaceRef);
+          if (
+            !existingWorkspace.exists ||
+            existingWorkspace.data()?.ownerUid !== identity.uid
+          ) {
+            throw new Error("REGISTRATION_PROFILE_CONFLICT");
+          }
+
+          return authoritativeWorkspaceFromDocument(
+            existingWorkspace.id,
+            existingWorkspace.data() || {},
+          );
+        }
+
+        const [workspaceSnapshot, emailClaim, phoneClaim] = await Promise.all([
+          transaction.get(workspaceRef),
+          transaction.get(emailClaimRef),
+          transaction.get(phoneClaimRef),
+        ]);
+        if (workspaceSnapshot.exists) {
+          throw new Error("REGISTRATION_WORKSPACE_CONFLICT");
+        }
+        if (emailClaim.exists || phoneClaim.exists) {
+          throw new Error("REGISTRATION_TRIAL_ALREADY_CLAIMED");
+        }
+
+        const workspace = {
+          id: workspaceId,
+          ownerUid: identity.uid,
+          ownerEmail: identity.email,
+          name: workspaceName,
+          industry,
+          ownerName,
+          phone,
+          status: "active",
+          planId: "starter",
+          subscriptionExpiresAt: new Date(expiryMillis)
+            .toISOString()
+            .split("T")[0],
+          entitlementExpiresAt: Timestamp.fromMillis(expiryMillis),
+          aiConversationsUsed: 0,
+          totalCustomers: 0,
+          totalAppointments: 0,
+          totalComplaints: 0,
+          createdAt: nowIso.split("T")[0],
+          registrationSource: "web_portal",
+          onboardingStatus: "in_progress",
+          onboardingCompleted: false,
+          onboardingStep: 1,
+          businessDescription: "",
+          onboardingAiReady: false,
+          onboardingCatalogReady: false,
+          aiSettings: {
+            agentName: `${workspaceName} AI Assistant`,
+            customPrompt: `Assist customers for ${workspaceName}. Be polite and helpful.`,
+            tone: "Friendly",
+            autoBookingEnabled: true,
+            autoComplaintEscalation: true,
+            languageMode: "auto",
+          },
+        };
+        const profile = {
+          id: identity.uid,
+          uid: identity.uid,
+          name: ownerName,
+          email: identity.email,
+          role: "client_owner",
+          workspaceId,
+          active: true,
+          createdAt: nowIso,
+        };
+        const claim = {
+          uid: identity.uid,
+          workspaceId,
+          createdAt: Timestamp.fromMillis(now.getTime()),
+        };
+
+        transaction.create(workspaceRef, workspace);
+        transaction.create(profileRef, profile);
+        transaction.create(emailClaimRef, { ...claim, kind: "email" });
+        transaction.create(phoneClaimRef, { ...claim, kind: "phone" });
+        return authoritativeWorkspaceFromDocument(workspaceId, workspace);
+      });
+
+      registeredWorkspacesStore = [
+        provisioned,
+        ...registeredWorkspacesStore.filter(
+          (workspace) => workspace.id !== provisioned.id,
+        ),
+      ];
+
+      return res.status(200).json({
+        success: true,
+        workspace: authoritativeWorkspaceToClientDto(provisioned),
+      });
+    } catch (error: any) {
+      const code = String(error?.message || "");
+      if (code === "REGISTRATION_TRIAL_ALREADY_CLAIMED") {
+        return res.status(409).json({
+          success: false,
+          code,
+          error: "This email or phone already used the starter trial",
+        });
+      }
+      if (
+        code === "REGISTRATION_PROFILE_CONFLICT" ||
+        code === "REGISTRATION_WORKSPACE_CONFLICT"
+      ) {
+        return res.status(409).json({
+          success: false,
+          code,
+          error: "Registration state conflicts with an existing account",
+        });
+      }
+      throw error;
+    }
+  }),
+);
 
 
 /**
@@ -3417,6 +3755,24 @@ function requireWorkspaceOwner(
   return workspace;
 }
 
+app.get(
+  "/api/workspaces/:workspaceId/context",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("role-safe workspace context", async (req, res) => {
+    const workspace = requireAuthenticatedWorkspace(
+      req,
+      res,
+      req.params.workspaceId,
+    );
+    if (!workspace) return;
+
+    const dto = req.foxAuth?.role === "staff"
+      ? authoritativeWorkspaceToStaffDto(workspace)
+      : authoritativeWorkspaceToClientDto(workspace);
+    return res.json({ success: true, workspace: dto });
+  }),
+);
+
 function requireWorkspaceFeature(
   workspace: any,
   feature: FoxFeature
@@ -3484,6 +3840,16 @@ function getWorkspaceById(workspaceId: string) {
   );
 }
 
+function getWorkspaceByMetaPageId(pageId: string) {
+  const cleanPageId = String(pageId || "").trim();
+  if (!cleanPageId) return undefined;
+
+  return registeredWorkspacesStore.find(
+    (workspace) =>
+      String(workspace.metaPageId || "").trim() === cleanPageId
+  );
+}
+
 async function withWorkspaceRuntimeIntegrations(workspace: any) {
   const workspaceId = String(workspace?.id || "");
 
@@ -3493,10 +3859,29 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
 
   const runtimeWorkspace =
     sanitizeAuthoritativeWorkspaceForRuntime(workspace);
-  const [sheetsToken, crmWebhookUrl] = await Promise.all([
+  const [
+    sheetsToken,
+    crmWebhookUrl,
+    clinicServices,
+    doctors,
+    knowledgeBase,
+    coupons,
+  ] = await Promise.all([
     getWorkspaceSecret(workspaceId, "googleSheetsAccessToken"),
     getWorkspaceSecret(workspaceId, "externalCrmWebhookUrl"),
+    workspaceDataService.getClinicServices(workspaceId),
+    workspaceDataService.getDoctors(workspaceId),
+    workspaceDataService.getKnowledgeFacts(workspaceId),
+    workspaceDataService.getCoupons(workspaceId),
   ]);
+
+  // These queries are all constrained by the authoritative workspace ID.
+  // They hydrate the tenant business catalog used by Telegram/WhatsApp and
+  // prevent an empty runtime workspace from producing generic welcome text.
+  runtimeWorkspace.clinicServices = clinicServices;
+  runtimeWorkspace.doctors = doctors;
+  runtimeWorkspace.knowledgeBase = knowledgeBase;
+  runtimeWorkspace.coupons = coupons;
 
   if (sheetsToken) {
     runtimeWorkspace.googleSheetsAccessToken = sheetsToken;
@@ -5316,6 +5701,22 @@ async function processWorkspaceWhatsAppWebhook(
 app.post(
   "/api/whatsapp/webhook/:workspaceId",
   async (req: any, res) => {
+    const signature = String(
+      req.headers["x-hub-signature-256"] || ""
+    );
+    const appSecret = String(
+      process.env.META_APP_SECRET || ""
+    );
+
+    if (!verifyMetaWebhookSignature(
+      req.rawBody,
+      signature,
+      appSecret
+    )) {
+      console.warn("[WhatsApp Webhook] Invalid or unavailable signature");
+      return res.sendStatus(appSecret ? 403 : 503);
+    }
+
     const workspaceId =
       String(
         req.params.workspaceId || ""
@@ -7603,27 +8004,33 @@ app.post("/api/telegram/webhook", async (req, res) => {
 
 // GET Facebook Webhook Verification (Required by Meta)
 const handleFacebookVerification = (req: express.Request, res: express.Response) => {
-  const mode = req.query["hub.mode"] || req.query["mode"];
-  const token = req.query["hub.verify_token"] || req.query["verify_token"];
+  const mode = String(req.query["hub.mode"] || req.query["mode"] || "");
+  const token = String(req.query["hub.verify_token"] || req.query["verify_token"] || "");
   const challenge = req.query["hub.challenge"] || req.query["challenge"];
 
   // Sanitized: log verification intent without echoing the raw query
   // (which may contain hub.verify_token / challenge values).
   console.log(`[Facebook Webhook Verification GET Request] mode=${mode || "n/a"}`);
 
-  if (mode === "subscribe" && challenge) {
-    console.log("[Facebook Webhook Verified Successfully!] Challenge:", challenge);
-    res.setHeader("Content-Type", "text/plain");
-    return res.status(200).send(String(challenge));
+  if (!INTEGRATION_FLAGS.meta) {
+    return res.status(503).send("Meta integration disabled");
   }
 
-  // Fallback: If challenge exists, always return it with 200 OK so Meta verification succeeds instantly
-  if (challenge) {
-    res.setHeader("Content-Type", "text/plain");
-    return res.status(200).send(String(challenge));
+  if (!activeFacebookVerifyToken.trim()) {
+    return res.status(503).send("Meta verification unavailable");
   }
 
-  return res.status(200).send("Facebook Webhook Active");
+  if (
+    mode !== "subscribe" ||
+    !challenge ||
+    !token ||
+    token !== activeFacebookVerifyToken
+  ) {
+    return res.status(403).send("Forbidden");
+  }
+
+  res.setHeader("Content-Type", "text/plain");
+  return res.status(200).send(String(challenge));
 };
 
 app.get("/api/webhook/facebook", handleFacebookVerification);
@@ -7631,56 +8038,22 @@ app.get("/webhook/facebook", handleFacebookVerification);
 
 // POST Facebook Webhook Receiver (Incoming Messages)
 const handleFacebookMessage = async (req: express.Request, res: express.Response) => {
-  const body = req.body;
-  // Sanitized: never log the full webhook body (may contain tokens / PII).
-  console.log("[Facebook Webhook Received POST] event payload received");
-
-  if (body.object === "page") {
-    for (const entry of body.entry || []) {
-      const messagingList = entry.messaging || [];
-      for (const webhookEvent of messagingList) {
-        // Skip echo messages sent by the page itself
-        if (webhookEvent.message && webhookEvent.message.is_echo) {
-          continue;
-        }
-
-        if (webhookEvent.message && webhookEvent.message.text) {
-          const senderPsid = webhookEvent.sender?.id;
-          const messageText = webhookEvent.message.text;
-
-          console.log(`[Facebook Messenger Received] Sender PSID: ${senderPsid}, Message: ${messageText}`);
-
-          if (senderPsid) {
-            // Process message with Agency Bot Engine
-            const replyText = await processAgencyBotMessage(senderPsid, { first_name: "عميل فيسبوك" }, messageText);
-
-            // Send Reply back to Facebook Page via Graph API if page token is configured
-            if (activeFacebookPageToken) {
-              try {
-                const graphRes = await fetch(`https://graph.facebook.com/v18.0/me/messages?access_token=${activeFacebookPageToken}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    recipient: { id: senderPsid },
-                    message: { text: replyText },
-                  }),
-                });
-                const graphData = await graphRes.json();
-                console.log("[Facebook Graph API Send Response]:", graphData);
-              } catch (err) {
-                console.error("[Facebook Messenger Send Reply Error]:", err);
-              }
-            } else {
-              console.warn("[Facebook Messenger]: activeFacebookPageToken is empty!");
-            }
-          }
-        }
-      }
-    }
-    return res.status(200).send("EVENT_RECEIVED");
-  } else {
-    return res.sendStatus(404);
+  if (!INTEGRATION_FLAGS.meta) {
+    return res.status(503).send("Meta integration disabled");
   }
+
+  const appSecret = String(process.env.META_APP_SECRET || "");
+  const signature = req.header("x-hub-signature-256") || undefined;
+  if (!appSecret.trim()) {
+    return res.status(503).send("Meta signature verification unavailable");
+  }
+  if (!verifyMetaWebhookSignature((req as any).rawBody, signature, appSecret)) {
+    return res.status(401).send("Invalid signature");
+  }
+
+  // These aliases used a global Page token and cannot preserve tenant
+  // isolation. Keep them fail-closed; use /api/webhooks/meta-social instead.
+  return res.status(410).send("Deprecated Meta webhook route");
 };
 
 app.post("/api/webhook/facebook", handleFacebookMessage);
@@ -7826,29 +8199,23 @@ app.get("/api/make/chat", (_req, res) => {
 });
 
 // Facebook Config API Endpoints
-app.get("/api/facebook/config", (_req, res) => {
+app.get("/api/facebook/config", authenticateFirebaseRequest, requireSuperAdmin, (_req, res) => {
   return res.json({
-    verifyToken: activeFacebookVerifyToken,
+    hasVerifyToken: Boolean(activeFacebookVerifyToken),
     hasPageToken: Boolean(activeFacebookPageToken),
-    webhookUrl: "https://fox-ai-agency.ai.studio/api/webhook/facebook",
+    webhookUrl: "/api/webhooks/meta-social",
   });
 });
 
-app.post("/api/facebook/config", (req, res) => {
-  const { verifyToken, pageToken } = req.body;
-  if (verifyToken && typeof verifyToken === "string") {
-    activeFacebookVerifyToken = verifyToken.trim();
-  }
-  if (typeof pageToken === "string") {
-    activeFacebookPageToken = pageToken.trim();
-  }
-  return res.json({
-    success: true,
-    message: "Facebook Messenger configuration updated successfully!",
-    verifyToken: activeFacebookVerifyToken,
-    hasPageToken: Boolean(activeFacebookPageToken),
-  });
-});
+app.post(
+  "/api/facebook/config",
+  authenticateFirebaseRequest,
+  requireSuperAdmin,
+  (_req, res) => res.status(410).json({
+    success: false,
+    error: "Use the tenant-scoped Meta secret-vault configuration route.",
+  }),
+);
 
 // Official Telegram Bot Simulation Endpoint
 app.post(
@@ -7882,18 +8249,27 @@ app.post(
 
 
 
-// n8n Webhook Simulation & Proxy Endpoint
+// n8n Webhook Proxy Endpoint
 app.post(
   "/api/n8n/webhook",
+  authenticateFirebaseRequest,
   secureAsyncRoute("n8n webhook proxy", async (req, res) => {
     const {
       event,
       payload,
-      customWebhookUrl,
       workspaceId: bodyWorkspaceId,
     } = req.body || {};
 
     const startTime = Date.now();
+
+    if (!INTEGRATION_FLAGS.n8n) {
+      return res.status(503).json({
+        success: false,
+        status: "disabled",
+        code: "N8N_DISABLED",
+        error: "n8n integration is disabled",
+      });
+    }
 
     // ========================================================
     // FOX SECURITY:
@@ -7932,6 +8308,16 @@ app.post(
       });
     }
 
+    const ownedWorkspace = requireWorkspaceOwner(
+      req,
+      res,
+      String(trustedWorkspace.id)
+    );
+
+    if (!ownedWorkspace) {
+      return;
+    }
+
     const access =
       requireWorkspaceFeature(
         trustedWorkspace,
@@ -7954,124 +8340,103 @@ app.post(
       `🔓 [FOX n8n] Allowed | Workspace=${trustedWorkspace.id} | Plan=${trustedWorkspace.planId} | Event=${event || "test_trigger"}`
     );
 
-    // ========================================================
-    // External n8n webhook
-    // ========================================================
+    const n8nWebhookUrl = String(
+      process.env.N8N_WEBHOOK_URL || ""
+    ).trim();
+    const n8nWebhookSecret = String(
+      process.env.N8N_WEBHOOK_SECRET || ""
+    ).trim();
 
-    if (
-      customWebhookUrl &&
-      typeof customWebhookUrl === "string" &&
-      customWebhookUrl.startsWith("http")
-    ) {
-      try {
-        const response = await fetch(
-          customWebhookUrl,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              ...(payload || {}),
-              workspaceId: trustedWorkspace.id,
-              event: event || "test_trigger",
-            }),
-          }
-        );
-
-        const durationMs =
-          Date.now() - startTime;
-
-        let data;
-
-        try {
-          data = await response.json();
-        } catch {
-          data = await response.text();
-        }
-
-        return res.json({
-          success: response.ok,
-          status:
-            response.ok
-              ? "success"
-              : "error",
-          statusCode: response.status,
-          durationMs,
-          workspaceId:
-            trustedWorkspace.id,
-          event:
-            event || "test_trigger",
-          executionId:
-            `exec_${Math.random()
-              .toString(36)
-              .substring(2, 9)}`,
-          timestamp:
-            new Date().toISOString(),
-          responseData: data,
-          message: response.ok
-            ? `External n8n Webhook triggered successfully! (HTTP ${response.status})`
-            : `External n8n Webhook returned HTTP ${response.status}`,
-        });
-
-      } catch (err: any) {
-        console.error("[FOX n8n External Webhook Error]:", err);
-        return res.status(502).json({
-          success: false,
-          status: "failed",
-          statusCode: 502,
-          durationMs:
-            Date.now() - startTime,
-          workspaceId:
-            trustedWorkspace.id,
-          error:
-            "Failed to reach external n8n webhook URL",
-          timestamp:
-            new Date().toISOString(),
-        });
-      }
+    if (!n8nWebhookUrl || !n8nWebhookSecret) {
+      return res.status(503).json({
+        success: false,
+        status: "not_configured",
+        code: "N8N_NOT_CONFIGURED",
+        error: "n8n webhook target is not configured",
+      });
     }
 
-    // ========================================================
-    // Internal n8n simulation
-    // ========================================================
+    let parsedTarget: URL;
+    try {
+      parsedTarget = new URL(n8nWebhookUrl);
+    } catch {
+      return res.status(503).json({
+        success: false,
+        status: "not_configured",
+        code: "N8N_WEBHOOK_URL_INVALID",
+        error: "n8n webhook target is invalid",
+      });
+    }
 
-    console.log(
-      `[n8n Webhook Triggered] Workspace=${trustedWorkspace.id} | Event=${event || "test_trigger"}`
-    );
+    const isInternalTarget =
+      parsedTarget.protocol === "http:" &&
+      ["n8n", "n8n-staging", "127.0.0.1", "localhost"].includes(
+        parsedTarget.hostname
+      );
 
-    return res.json({
-      success: true,
-      status: "success",
-      statusCode: 200,
-      durationMs:
-        Math.floor(
-          Math.random() * 40
-        ) + 15,
-      workspaceId:
-        trustedWorkspace.id,
-      event:
-        event || "test_trigger",
-      executionId:
-        `exec_${Math.random()
-          .toString(36)
-          .substring(2, 9)}`,
-      timestamp:
-        new Date().toISOString(),
-      responseData: {
-        received: true,
-        event:
-          event || "test_trigger",
-        workspaceId:
-          trustedWorkspace.id,
-        processedBy:
-          "FOX AI Agency n8n Integration Hub",
-        dataEcho:
-          payload || {},
-      },
-      message:
-        `n8n workflow executed successfully for event: ${event || "test_trigger"}`,
-    });
+    if (parsedTarget.protocol !== "https:" && !isInternalTarget) {
+      return res.status(503).json({
+        success: false,
+        status: "not_configured",
+        code: "N8N_WEBHOOK_URL_INSECURE",
+        error: "n8n webhook target must use HTTPS or the private Docker network",
+      });
+    }
+
+    try {
+      const response = await fetch(n8nWebhookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-FOX-N8N-Secret": n8nWebhookSecret,
+        },
+        body: JSON.stringify({
+          event: String(event || "test_trigger"),
+          workspaceId: String(trustedWorkspace.id),
+          payload: payload || {},
+          emittedAt: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+      let responseData: unknown = null;
+
+      if (responseText) {
+        try {
+          responseData = JSON.parse(responseText);
+        } catch {
+          responseData = { received: true };
+        }
+      }
+
+      return res.status(response.ok ? 200 : 502).json({
+        success: response.ok,
+        status: response.ok ? "success" : "error",
+        statusCode: response.status,
+        durationMs,
+        workspaceId: String(trustedWorkspace.id),
+        event: String(event || "test_trigger"),
+        responseData,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error(
+        "[FOX n8n External Webhook Error]",
+        error?.name || "request_failed"
+      );
+
+      return res.status(502).json({
+        success: false,
+        status: "failed",
+        statusCode: 502,
+        durationMs: Date.now() - startTime,
+        workspaceId: String(trustedWorkspace.id),
+        error: "Failed to reach configured n8n webhook",
+        timestamp: new Date().toISOString(),
+      });
+    }
   })
 );
 

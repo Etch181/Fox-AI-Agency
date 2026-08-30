@@ -47,6 +47,14 @@ const SAFE_WORKSPACE_FIELDS = [
   "updatedAt",
 ] as const;
 
+const STAFF_WORKSPACE_FIELDS = [
+  "id",
+  "name",
+  "industry",
+  "status",
+  "planId",
+] as const;
+
 const SENSITIVE_KEY =
   /(?:token|secret|password|credential|private.?key|api.?key|cipher|encrypted|auth.?tag|^iv$|webhook|callback)/i;
 
@@ -138,6 +146,23 @@ export function authoritativeWorkspaceToAdminDto(
   workspace: WorkspaceRecord,
 ): WorkspaceRecord {
   return authoritativeWorkspaceToDto(workspace);
+}
+
+export function authoritativeWorkspaceToStaffDto(
+  workspace: WorkspaceRecord,
+): WorkspaceRecord {
+  const dto: WorkspaceRecord = {};
+  for (const field of STAFF_WORKSPACE_FIELDS) {
+    if (workspace[field] !== undefined) {
+      dto[field] = sanitizeNested(workspace[field]);
+    }
+  }
+
+  const entitlement = workspace.entitlementExpiresAt;
+  if (entitlement && typeof entitlement.toMillis === "function") {
+    dto.entitlementExpiresAtMillis = entitlement.toMillis();
+  }
+  return dto;
 }
 
 export async function refreshAuthoritativeWorkspaceCache(

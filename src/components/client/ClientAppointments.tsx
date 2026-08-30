@@ -1,26 +1,44 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { Calendar as CalendarIcon, Clock, User, CheckCircle2, XCircle, AlertCircle, Plus } from "lucide-react";
+import { formatLocalDateKey } from "../../utils/dateOnly";
 
 export const ClientAppointments: React.FC = () => {
-  const { currentWorkspace, appointments, doctors, updateAppointmentStatus, addAppointment } = useApp();
+  const {
+    currentWorkspace,
+    workspacesLoading,
+    appointments,
+    appointmentsLoading,
+    appointmentsError,
+    doctors,
+    updateAppointmentStatus,
+    addAppointment,
+  } = useApp();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [patientName, setPatientName] = useState("");
   const [patientPhone, setPatientPhone] = useState("");
   const [doctorId, setDoctorId] = useState(doctors[0]?.id || "");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(formatLocalDateKey(new Date()));
   const [timeSlot, setTimeSlot] = useState("05:00 PM");
 
-  if (!currentWorkspace) return null;
+  if (!currentWorkspace) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+        {workspacesLoading
+          ? "Loading workspaces..."
+          : "No authorized workspace is selected."}
+      </div>
+    );
+  }
 
   const workspaceApts = appointments.filter((a) => a.workspaceId === currentWorkspace.id);
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const doc = doctors.find((d) => d.id === doctorId);
 
-    addAppointment({
+    const success = await addAppointment({
       workspaceId: currentWorkspace.id,
       patientName,
       patientPhone,
@@ -32,6 +50,8 @@ export const ClientAppointments: React.FC = () => {
       status: "Confirmed",
       channel: "WhatsApp",
     });
+
+    if (!success) return;
 
     setIsModalOpen(false);
     setPatientName("");
@@ -75,7 +95,31 @@ export const ClientAppointments: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {workspaceApts.map((apt) => (
+              {appointmentsLoading && (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                    Loading appointments...
+                  </td>
+                </tr>
+              )}
+
+              {!appointmentsLoading && appointmentsError && (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-xs font-semibold text-rose-500">
+                    Appointments could not be loaded. Please retry after checking your connection.
+                  </td>
+                </tr>
+              )}
+
+              {!appointmentsLoading && !appointmentsError && workspaceApts.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                    No appointments yet.
+                  </td>
+                </tr>
+              )}
+
+              {!appointmentsLoading && !appointmentsError && workspaceApts.map((apt) => (
                 <tr key={apt.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
                     {apt.patientName}

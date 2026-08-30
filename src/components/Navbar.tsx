@@ -28,6 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
     darkMode,
     setDarkMode,
     workspaces,
+    workspacesLoading,
     currentWorkspace,
     setCurrentWorkspaceId,
     toasts,
@@ -128,7 +129,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
                   {isAr ? "معاينة حسابات العملاء" : "Preview Client Workspaces"}
                 </p>
 
-                {workspaces.map((ws) => (
+                {workspacesLoading && (
+                  <div className="px-3 py-3 text-center text-xs font-semibold text-slate-400">
+                    Loading workspaces...
+                  </div>
+                )}
+
+                {!workspacesLoading && workspaces.length === 0 && (
+                  <div className="px-3 py-3 text-center text-xs font-semibold text-slate-400">
+                    No authorized workspaces available.
+                  </div>
+                )}
+
+                {!workspacesLoading && workspaces.map((ws) => (
                   <button
                     key={ws.id}
                     onClick={() => {

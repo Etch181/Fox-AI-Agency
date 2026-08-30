@@ -62,11 +62,31 @@ type CustomerTimelineItem = {
 };
 
 export const ClientCRM: React.FC = () => {
+  const { currentWorkspace, workspacesLoading } = useApp();
+
+  if (!currentWorkspace) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+        {workspacesLoading
+          ? "Loading workspaces..."
+          : "No authorized workspace is selected."}
+      </div>
+    );
+  }
+
+  return <HydratedClientCRM key={currentWorkspace.id} />;
+};
+
+const HydratedClientCRM: React.FC = () => {
+  const app = useApp();
+  const currentWorkspace = app.currentWorkspace!;
   const {
-    currentWorkspace,
+    crmLeads,
+    crmLeadsLoading,
+    crmLeadsError,
     addToast,
     updateWorkspaceField,
-  } = useApp();
+  } = app;
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -81,8 +101,6 @@ export const ClientCRM: React.FC = () => {
   const [status, setStatus] = useState<CustomerLead["status"]>("Lead");
   const [notes, setNotes] = useState("");
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
-  const [crmLeads, setCrmLeads] = useState<CustomerLead[]>([]);
-  const [loadingLeads, setLoadingLeads] = useState(true);
 
   const [customerTimeline, setCustomerTimeline] =
     useState<CustomerTimelineItem[]>([]);
@@ -90,52 +108,8 @@ export const ClientCRM: React.FC = () => {
   const [timelineLoading, setTimelineLoading] =
     useState(false);
 
-  useEffect(() => {
-    if (!currentWorkspace?.id) {
-      setCrmLeads([]);
-      setLoadingLeads(false);
-      return;
-    }
-
-    setLoadingLeads(true);
-
-    const ref = collection(
-      db,
-      "workspaces",
-      currentWorkspace.id,
-      "crmLeads"
-    );
-
-    const q = query(
-      ref,
-      where("workspaceId", "==", currentWorkspace.id),
-      orderBy("lastInteraction", "desc")
-    );
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const rows = snapshot.docs.map((snap) => ({
-          id: snap.id,
-          ...snap.data(),
-        })) as CustomerLead[];
-
-        setCrmLeads(rows);
-        setLoadingLeads(false);
-      },
-      (error) => {
-        console.error(
-          "[FOX CRM] Live tenant CRM subscription failed:",
-          error
-        );
-        setLoadingLeads(false);
-      }
-    );
-
-    return unsubscribe;
-  }, [currentWorkspace?.id]);
-
-  if (!currentWorkspace) return null;
+  const loadingLeads = crmLeadsLoading;
+  const crmSubscriptionError = crmLeadsError;
 
   const leads = crmLeads.filter(
     (l) => l.workspaceId === currentWorkspace.id
@@ -1032,7 +1006,18 @@ export const ClientCRM: React.FC = () => {
                 </tr>
               )}
 
-              {!loadingLeads && filtered.length === 0 && (
+              {!loadingLeads && crmSubscriptionError && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="py-8 text-center text-xs font-semibold text-rose-500"
+                  >
+                    CRM data could not be loaded. Please retry after checking your connection.
+                  </td>
+                </tr>
+              )}
+
+              {!loadingLeads && !crmSubscriptionError && filtered.length === 0 && (
                 <tr>
                   <td
                     colSpan={6}

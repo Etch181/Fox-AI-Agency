@@ -1,11 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
-import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, getDoc, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from "react";
+import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, getDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db, auth, sanitizeForFirestore } from "../services/firebase";
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
 } from "firebase/auth";
+import type { User as FirebaseAuthUser } from "firebase/auth";
 import { subscribeToFirestoreTranslations } from "../services/LanguageService";
 import {
   User,
@@ -40,14 +43,11 @@ import {
   ServiceRating,
 } from "../types";
 import {
-  DEMO_USERS,
   INITIAL_PLANS,
   INITIAL_WORKSPACES,
   INITIAL_ACTIVATION_CODES,
   INITIAL_PAYMENTS,
-  INITIAL_CRM_LEADS,
   INITIAL_DOCTORS,
-  INITIAL_APPOINTMENTS,
   INITIAL_MENU,
   INITIAL_MEDICINES,
   INITIAL_PRODUCTS,
@@ -64,6 +64,15 @@ import {
 import { authenticatedFetch } from "../services/authenticatedFetch";
 import { createAuditLogId } from "../utils/auditLog";
 import { calculateEntitlementRenewal } from "../utils/entitlementRenewal";
+import { resolveAuthorizedWorkspaceSelection } from "../utils/workspaceHydration";
+import { isValidDateOnlyKey } from "../utils/dateOnly";
+import { resolveAuthoritativeUserRole } from "../security/appAuthorization";
+import {
+  RegistrationCoordinator,
+  rollbackCreatedAuthIdentity,
+  shouldRollbackRegistration,
+  type RegistrationProvisioningOperation,
+} from "../security/registrationProvisioning";
 
 interface ToastMessage {
   id: string;
@@ -73,7 +82,9 @@ interface ToastMessage {
 
 interface AppContextType {
   currentUser: User | null;
-  setCurrentUser: (user: User | null) => void;
+  authHydrated: boolean;
+  workspacesLoading: boolean;
+  workspacesError: string | null;
   darkMode: boolean;
   setDarkMode: (val: boolean) => void;
   language: 'ar' | 'en';
@@ -85,8 +96,12 @@ interface AppContextType {
   activationCodes: ActivationCode[];
   payments: InstapayPayment[];
   crmLeads: CustomerLead[];
+  crmLeadsLoading: boolean;
+  crmLeadsError: string | null;
   doctors: Doctor[];
   appointments: Appointment[];
+  appointmentsLoading: boolean;
+  appointmentsError: string | null;
   menuItems: MenuItem[];
   medicines: MedicineItem[];
   products: StoreProduct[];
@@ -156,7 +171,6 @@ interface AppContextType {
   resetPlansToDefault: () => Promise<void>;
   
   // Actions
-  loginAs: (userId: string) => void;
   loginWithEmail: (email: string, password?: string) => Promise<boolean>;
   logout: () => void;
   registerWorkspace: (
@@ -206,11 +220,11 @@ interface AppContextType {
   updateTicketStatus: (ticketId: string, status: SupportTicket["status"]) => void;
   
   // CRM & Industry actions
-  addCustomerLead: (lead: Omit<CustomerLead, "id" | "createdAt">) => void;
-  updateLeadStatus: (leadId: string, status: CustomerLead["status"]) => void;
-  addAppointment: (apt: Omit<Appointment, "id">) => void;
-  updateAppointmentStatus: (aptId: string, status: Appointment["status"]) => void;
-  updateAppointment: (id: string, updates: Partial<Appointment>) => void;
+  addCustomerLead: (lead: Omit<CustomerLead, "id" | "createdAt">) => Promise<void>;
+  updateLeadStatus: (leadId: string, status: CustomerLead["status"]) => Promise<void>;
+  addAppointment: (apt: Omit<Appointment, "id">) => Promise<boolean>;
+  updateAppointmentStatus: (aptId: string, status: Appointment["status"]) => Promise<void>;
+  updateAppointment: (id: string, updates: Partial<Appointment>) => Promise<void>;
   addMenuItem: (item: Omit<MenuItem, "id">) => void;
   updateMenuItem: (id: string, updates: Partial<MenuItem>) => void;
   addMedicineItem: (med: Omit<MedicineItem, "id">) => void;
@@ -272,15 +286,243 @@ if (typeof window !== "undefined") {
 }
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // LocalStorage initialization or default fallbacks
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem("fox_user");
-    return saved ? JSON.parse(saved) : null;
-  });
+  // Firebase Auth + users/{uid} are authoritative. Browser storage must
+  // never impersonate an authenticated user while Firebase restores.
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authHydrated, setAuthHydrated] = useState(false);
+  const registrationCoordinatorRef = useRef(
+    new RegistrationCoordinator(),
+  );
+  const mountedRef = useRef(true);
+  const lastObservedAuthUidRef = useRef("");
+  const authHydrationRef = useRef<{
+    uid: string;
+    status: "pending" | "success" | "failure";
+    user: User | null;
+  }>({ uid: "", status: "pending", user: null });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const waitForAuthHydration = async (
+    uid: string,
+    timeoutMs = 10000,
+  ): Promise<User | null> => {
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
+
+    while (Date.now() < deadline) {
+      if (!mountedRef.current) return null;
+
+      const result = authHydrationRef.current;
+      if (
+        auth.currentUser?.uid !== uid &&
+        result.uid !== uid
+      ) {
+        return null;
+      }
+      if (result.uid === uid && result.status !== "pending") {
+        return result.status === "success" ? result.user : null;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+
+    return null;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    let revision = 0;
+
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (firebaseUser) => {
+        const currentRevision = ++revision;
+        const nextUid = firebaseUser?.uid || "";
+        const previousUid = lastObservedAuthUidRef.current;
+        lastObservedAuthUidRef.current = nextUid;
+        authHydrationRef.current = {
+          uid: nextUid,
+          status: "pending",
+          user: null,
+        };
+        setAuthHydrated(false);
+        setCurrentUser(null);
+        setWorkspaces([]);
+        setWorkspacesLoading(true);
+        setCrmLeads([]);
+        setAppointments([]);
+        if (previousUid && previousUid !== nextUid) {
+          setCurrentWorkspaceIdState("");
+          localStorage.removeItem("fox_current_workspace");
+        }
+
+        void (async () => {
+          if (!firebaseUser) {
+            if (!cancelled && currentRevision === revision) {
+              setCurrentUser(null);
+              setAuthHydrated(true);
+              authHydrationRef.current = {
+                uid: "",
+                status: "success",
+                user: null,
+              };
+              localStorage.removeItem("fox_user");
+            }
+            return;
+          }
+
+          let provisioning: RegistrationProvisioningOperation | null = null;
+
+          try {
+            const profileRef = doc(db, "users", firebaseUser.uid);
+            let profileSnapshot: any = null;
+
+            provisioning = await registrationCoordinatorRef.current
+              .waitForAuthOperation(
+                firebaseUser.uid,
+                firebaseUser.email,
+              );
+
+            if (provisioning) {
+              await provisioning.profileReady;
+
+              if (provisioning.outcome !== "committed") {
+                throw new Error("AUTH_PROFILE_PROVISIONING_FAILED");
+              }
+
+              while (!cancelled && currentRevision === revision) {
+                try {
+                  profileSnapshot = await getDoc(profileRef);
+                  if (profileSnapshot.exists()) break;
+                } catch (profileError) {
+                  console.warn(
+                    "[FOX AUTH] Waiting for provisioned profile:",
+                    profileError,
+                  );
+                }
+
+                await new Promise((resolve) =>
+                  window.setTimeout(resolve, 250),
+                );
+              }
+
+              if (cancelled || currentRevision !== revision) return;
+            } else {
+              profileSnapshot = await getDoc(profileRef);
+            }
+
+            if (!profileSnapshot?.exists()) {
+              throw new Error("AUTH_PROFILE_NOT_FOUND");
+            }
+
+            const profile = profileSnapshot.data() as any;
+            const authoritativeRole = resolveAuthoritativeUserRole(
+              profile.role,
+            );
+            if (!authoritativeRole) {
+              throw new Error("AUTH_PROFILE_ROLE_INVALID");
+            }
+
+            const restoredUser: User = {
+              id: firebaseUser.uid,
+              name:
+                profile.name ||
+                firebaseUser.displayName ||
+                firebaseUser.email ||
+                "FOX User",
+              email:
+                profile.email ||
+                firebaseUser.email ||
+                "",
+              role: authoritativeRole,
+              workspaceId: profile.workspaceId,
+              createdAt:
+                profile.createdAt ||
+                new Date().toISOString(),
+            };
+
+            if (
+              restoredUser.role !== "super_admin" &&
+              !restoredUser.workspaceId
+            ) {
+              throw new Error("AUTH_WORKSPACE_BINDING_REQUIRED");
+            }
+
+            if (!cancelled && currentRevision === revision) {
+              setCurrentUser(restoredUser);
+              setAuthHydrated(true);
+              authHydrationRef.current = {
+                uid: firebaseUser.uid,
+                status: "success",
+                user: restoredUser,
+              };
+              localStorage.setItem(
+                "fox_user",
+                JSON.stringify(restoredUser),
+              );
+
+              if (restoredUser.workspaceId) {
+                setCurrentWorkspaceIdState(
+                  restoredUser.workspaceId,
+                );
+              }
+            }
+          } catch (error) {
+            console.error(
+              "[FOX AUTH] Session restoration failed:",
+              error,
+            );
+
+            if (
+              !(
+                provisioning &&
+                registrationCoordinatorRef.current.isCurrent(provisioning) &&
+                provisioning.uid === firebaseUser.uid &&
+                provisioning.outcome !== "committed"
+              ) &&
+              auth.currentUser?.uid === firebaseUser.uid
+            ) {
+              try {
+                await firebaseSignOut(auth);
+                return;
+              } catch (signOutError) {
+                console.warn(
+                  "[FOX AUTH] Failed to clear invalid restored session:",
+                  signOutError,
+                );
+              }
+            }
+
+            if (!cancelled && currentRevision === revision) {
+              setCurrentUser(null);
+              setAuthHydrated(true);
+              authHydrationRef.current = {
+                uid: firebaseUser.uid,
+                status: "failure",
+                user: null,
+              };
+              localStorage.removeItem("fox_user");
+            }
+          }
+        })();
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      revision += 1;
+      unsubscribe();
+    };
+  }, []);
 
   const [allUsers, setAllUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem("fox_users");
-    return saved ? JSON.parse(saved) : DEMO_USERS;
+    return saved ? JSON.parse(saved) : [];
   });
 
   useEffect(() => {
@@ -330,6 +572,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(true);
+  const [workspacesError, setWorkspacesError] = useState<string | null>(null);
+  const [workspaceDirectoryRefresh, setWorkspaceDirectoryRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!authHydrated || currentUser?.role !== "super_admin") return;
+
+    const refreshOnFocus = () => {
+      setWorkspaceDirectoryRefresh((revision) => revision + 1);
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [authHydrated, currentUser?.role]);
 
   
   // Helper to sync Firestore to local state
@@ -354,7 +609,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [currentWorkspaceId, setCurrentWorkspaceIdState] = useState<string>(() => {
-    return currentUser?.workspaceId || "";
+    return localStorage.getItem("fox_current_workspace") || "";
   });
 
   const [plans, setPlans] = useState<SubscriptionPlan[]>(() => {
@@ -391,7 +646,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Tenant workspaces use a direct document listener. Super-admin
   // directories come from the authenticated, secret-free DTO API.
   useEffect(() => {
-    if (!currentUser) return;
+    if (!authHydrated) {
+      setWorkspaces([]);
+      setWorkspacesLoading(true);
+      setWorkspacesError(null);
+      return;
+    }
+
+    if (!currentUser) {
+      setWorkspaces([]);
+      setWorkspacesLoading(false);
+      setWorkspacesError(null);
+      return;
+    }
+
+    setWorkspacesLoading(true);
+    setWorkspacesError(null);
 
     if (currentUser.role === "super_admin") {
       let cancelled = false;
@@ -419,17 +689,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })) as Workspace[];
 
           setWorkspaces(fetched);
+          setWorkspacesError(null);
           setCurrentWorkspaceIdState((currentId) => {
-            if (fetched.length === 0) return "";
-            return fetched.some((workspace) => workspace.id === currentId)
-              ? currentId
-              : fetched[0].id;
+            return resolveAuthorizedWorkspaceSelection(
+              fetched,
+              currentId,
+              { isSuperAdmin: true },
+            );
           });
+          setWorkspacesLoading(false);
         })
         .catch((error) => {
           if (!cancelled) {
             console.warn("Workspace directory sync notice:", error);
             setWorkspaces([]);
+            setWorkspacesLoading(false);
+            setWorkspacesError("Workspace directory could not be loaded.");
           }
         });
 
@@ -440,7 +715,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!currentUser.workspaceId) {
       setWorkspaces([]);
+      setWorkspacesLoading(false);
+      setWorkspacesError("Authenticated user has no workspace binding.");
       return;
+    }
+
+    if (currentUser.role === "staff") {
+      let cancelled = false;
+      void authenticatedFetch(
+        `/api/workspaces/${encodeURIComponent(currentUser.workspaceId)}/context`,
+      )
+        .then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok || !payload.success) {
+            throw new Error(payload.error || "Workspace context failed to load");
+          }
+          if (cancelled) return;
+
+          const workspace = {
+            ...payload.workspace,
+            entitlementExpiresAt: Number.isFinite(
+              payload.workspace?.entitlementExpiresAtMillis,
+            )
+              ? Timestamp.fromMillis(
+                  payload.workspace.entitlementExpiresAtMillis,
+                )
+              : undefined,
+          } as Workspace;
+          if (workspace.id !== currentUser.workspaceId) {
+            throw new Error("WORKSPACE_CONTEXT_MISMATCH");
+          }
+
+          setWorkspaces([workspace]);
+          setWorkspacesError(null);
+          setCurrentWorkspaceIdState(currentUser.workspaceId);
+          setWorkspacesLoading(false);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.warn("Staff workspace context sync notice:", error);
+            setWorkspaces([]);
+            setWorkspacesLoading(false);
+            setWorkspacesError("Workspace context could not be loaded.");
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
     }
 
     const workspaceRef = doc(
@@ -454,6 +776,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (snapshot) => {
         if (!snapshot.exists()) {
           setWorkspaces([]);
+          setCurrentWorkspaceIdState("");
+          setWorkspacesLoading(false);
+          setWorkspacesError("Authorized workspace was not found.");
           return;
         }
 
@@ -462,14 +787,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: snapshot.id,
         };
         setWorkspaces([workspace]);
+        setWorkspacesError(null);
+        setCurrentWorkspaceIdState(
+          resolveAuthorizedWorkspaceSelection(
+            [workspace],
+            currentWorkspaceId,
+            {
+              isSuperAdmin: false,
+              userWorkspaceId: currentUser.workspaceId,
+            },
+          ),
+        );
+        setWorkspacesLoading(false);
         localStorage.setItem("fox_workspaces", JSON.stringify([workspace]));
       },
       (error) => {
         console.warn("Firestore workspace sync notice:", error);
         setWorkspaces([]);
+        setWorkspacesLoading(false);
+        setWorkspacesError("Workspace could not be loaded.");
       },
     );
-  }, [currentUser]);
+  }, [
+    authHydrated,
+    currentUser?.id,
+    currentUser?.role,
+    currentUser?.workspaceId,
+    workspaceDirectoryRefresh,
+  ]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -496,7 +841,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
 
-  // Browser workspace state is hydrated only by the Firestore listeners above.
+  // Client owners use a direct listener; staff receive a least-privilege DTO.
   // Runtime server cache refreshes use Admin SDK reads and never browser JSON.
 
   // FOX ACTIVATION SECURITY V2
@@ -518,16 +863,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments
   );
 
-  const [crmLeads, setCrmLeads] = useState<CustomerLead[]>(() => {
-    const saved = localStorage.getItem("fox_leads");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [crmLeads, setCrmLeads] = useState<CustomerLead[]>([]);
+  const [crmLeadsLoading, setCrmLeadsLoading] = useState(true);
+  const [crmLeadsError, setCrmLeadsError] = useState<string | null>(null);
 
   const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>(() => {
-    const saved = localStorage.getItem("fox_apts");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(true);
+  const [appointmentsError, setAppointmentsError] = useState<string | null>(null);
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
     const saved = localStorage.getItem("fox_menu");
@@ -611,8 +954,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  useCollectionSync("crmLeads", setCrmLeads);
-  useCollectionSync("appointments", setAppointments);
   useCollectionSync("menuItems", setMenuItems);
   useCollectionSync("medicines", setMedicines);
   useCollectionSync("products", setProducts);
@@ -896,8 +1237,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [supportTickets]);
 
   useEffect(() => {
-    localStorage.setItem("fox_user", JSON.stringify(currentUser));
-  }, [currentUser]);
+    if (!authHydrated) return;
+
+    if (currentUser) {
+      localStorage.setItem("fox_user", JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem("fox_user");
+    }
+  }, [authHydrated, currentUser]);
 
   useEffect(() => {
     localStorage.setItem("fox_theme", darkMode ? "dark" : "light");
@@ -920,13 +1267,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // FOX Production Billing:
   // payments are persisted in Firestore, not localStorage.
 
-  useEffect(() => {
-    localStorage.setItem("fox_leads", JSON.stringify(crmLeads));
-  }, [crmLeads]);
-
-  useEffect(() => {
-    localStorage.setItem("fox_apts", JSON.stringify(appointments));
-  }, [appointments]);
 
   useEffect(() => {
     localStorage.setItem("fox_menu", JSON.stringify(menuItems));
@@ -964,20 +1304,209 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Lock workspace context to authenticated profile for non-admin users
   const currentWorkspace = useMemo(() => {
+    if (!authHydrated || workspacesLoading) return null;
+
     if (currentUser && !isSuperAdmin && currentUser.workspaceId) {
       const userWs = workspaces.find((w) => w.id === currentUser.workspaceId);
-      if (userWs) return userWs;
+      return userWs || null;
     }
-    return workspaces.find((w) => w.id === currentWorkspaceId) || workspaces[0] || null;
-  }, [currentUser, isSuperAdmin, currentWorkspaceId, workspaces]);
+
+    return (
+      workspaces.find((w) => w.id === currentWorkspaceId) ||
+      null
+    );
+  }, [
+    authHydrated,
+    workspacesLoading,
+    currentUser,
+    isSuperAdmin,
+    currentWorkspaceId,
+    workspaces,
+  ]);
 
   const setCurrentWorkspaceId = (id: string) => {
     if (!isSuperAdmin) {
       addToast("غير مسموح للمشترك بالتنقل لحسابات عملاء آخرين", "error");
       return;
     }
+
+    if (!workspaces.some((workspace) => workspace.id === id)) {
+      addToast("مساحة العمل المطلوبة غير متاحة", "error");
+      return;
+    }
+
     setCurrentWorkspaceIdState(id);
+    localStorage.setItem("fox_current_workspace", id);
   };
+
+  useEffect(() => {
+    if (
+      workspacesLoading ||
+      !currentWorkspaceId ||
+      !workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )
+    ) {
+      return;
+    }
+
+    localStorage.setItem(
+      "fox_current_workspace",
+      currentWorkspaceId,
+    );
+  }, [currentWorkspaceId, workspaces, workspacesLoading]);
+
+  // Tenant-facing CRM reads are authoritative only from
+  // workspaces/{workspaceId}/crmLeads. Root crmLeads is compatibility-only.
+  useEffect(() => {
+    if (!authHydrated || workspacesLoading) {
+      setCrmLeads([]);
+      setCrmLeadsLoading(true);
+      setCrmLeadsError(null);
+      return;
+    }
+
+    if (!currentWorkspace?.id) {
+      setCrmLeads([]);
+      setCrmLeadsLoading(false);
+      setCrmLeadsError(null);
+      return;
+    }
+
+    setCrmLeads([]);
+    setCrmLeadsLoading(true);
+    setCrmLeadsError(null);
+
+    const ref = query(
+      collection(
+        db,
+        "workspaces",
+        currentWorkspace.id,
+        "crmLeads",
+      ),
+      where("workspaceId", "==", currentWorkspace.id),
+    );
+
+    return onSnapshot(
+      ref,
+      (snapshot) => {
+        const rows = snapshot.docs
+          .map((snapshotDoc) => ({
+            ...snapshotDoc.data(),
+            id: snapshotDoc.id,
+          }))
+          .filter(
+            (lead: any) =>
+              String(lead.workspaceId || "") ===
+              currentWorkspace.id,
+          )
+          .sort((a: any, b: any) =>
+            String(b.lastInteraction || b.updatedAt || "")
+              .localeCompare(
+                String(a.lastInteraction || a.updatedAt || ""),
+              ),
+          ) as CustomerLead[];
+
+        setCrmLeads(rows);
+        setCrmLeadsLoading(false);
+        setCrmLeadsError(null);
+      },
+      (error) => {
+        console.error(
+          "[FOX CRM] Authoritative tenant subscription failed:",
+          error,
+        );
+        setCrmLeads([]);
+        setCrmLeadsLoading(false);
+        setCrmLeadsError("CRM data could not be loaded.");
+      },
+    );
+  }, [
+    authHydrated,
+    workspacesLoading,
+    currentWorkspace?.id,
+  ]);
+
+  // Tenant-facing appointment reads use the same nested collection as the
+  // Telegram booking writer. Root appointments remains compatibility-only.
+  useEffect(() => {
+    if (!authHydrated || workspacesLoading) {
+      setAppointments([]);
+      setAppointmentsLoading(true);
+      setAppointmentsError(null);
+      return;
+    }
+
+    if (!currentWorkspace?.id) {
+      setAppointments([]);
+      setAppointmentsLoading(false);
+      setAppointmentsError(null);
+      return;
+    }
+
+    setAppointments([]);
+    setAppointmentsLoading(true);
+    setAppointmentsError(null);
+
+    const ref = query(
+      collection(
+        db,
+        "workspaces",
+        currentWorkspace.id,
+        "appointments",
+      ),
+      where("workspaceId", "==", currentWorkspace.id),
+    );
+
+    return onSnapshot(
+      ref,
+      (snapshot) => {
+        const rows = snapshot.docs
+          .map((snapshotDoc) => {
+            const data: any = snapshotDoc.data();
+
+            return {
+              ...data,
+              id: snapshotDoc.id,
+              workspaceId: String(data.workspaceId || ""),
+              patientName:
+                data.patientName || data.customerName || "",
+              patientPhone:
+                data.patientPhone || data.phone || "",
+              timeSlot:
+                data.timeSlot || data.time || "",
+              date: String(data.date || ""),
+            } as Appointment;
+          })
+          .filter(
+            (appointment) =>
+              appointment.workspaceId === currentWorkspace.id,
+          )
+          .sort((a, b) =>
+            `${a.date || ""} ${a.timeSlot || ""}`.localeCompare(
+              `${b.date || ""} ${b.timeSlot || ""}`,
+            ),
+          );
+
+        setAppointments(rows);
+        setAppointmentsLoading(false);
+        setAppointmentsError(null);
+      },
+      (error) => {
+        console.error(
+          "[FOX Appointments] Authoritative tenant subscription failed:",
+          error,
+        );
+        setAppointments([]);
+        setAppointmentsLoading(false);
+        setAppointmentsError("Appointments could not be loaded.");
+      },
+    );
+  }, [
+    authHydrated,
+    workspacesLoading,
+    currentWorkspace?.id,
+  ]);
 
   // Multi-tenancy Scoped State Views for Non-Admin Users
   const scopedCrmLeads = useMemo(() => {
@@ -1054,17 +1583,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return supportTickets.filter((t) => t.workspaceId === currentWorkspace?.id);
   }, [supportTickets, currentWorkspace?.id, isSuperAdmin]);
 
-  const loginAs = (userId: string) => {
-    const found = allUsers.find((u) => u.id === userId) || DEMO_USERS.find((u) => u.id === userId);
-    if (found) {
-      setCurrentUser(found);
-      if (found.workspaceId) {
-        setCurrentWorkspaceIdState(found.workspaceId);
-      }
-      addToast(`تم تسجيل الدخول بحساب: ${found.name}`, "info");
-    }
-  };
-
   const loginWithEmail = async (
     email: string,
     password?: string
@@ -1086,65 +1604,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
       const uid = credential.user.uid;
+      const appUser = await waitForAuthHydration(uid);
 
-      // User profile contains role + tenant workspace binding.
-      const userRef = doc(db, "users", uid);
-      const userSnap = await getDoc(userRef);
-
-      if (!userSnap.exists()) {
-        await firebaseSignOut(auth);
-
+      if (!appUser) {
+        if (auth.currentUser?.uid === uid) {
+          await firebaseSignOut(auth);
+        }
         addToast(
-          "تم التحقق من الحساب ولكن ملف المستخدم غير موجود بالمنظومة",
-          "error"
+          "تم التحقق من الحساب ولكن تعذر تحميل ملف المستخدم المصرح به",
+          "error",
         );
-
         return false;
-      }
-
-      const profile = userSnap.data() as any;
-
-      const appUser: User = {
-        id: uid,
-        name:
-          profile.name ||
-          credential.user.displayName ||
-          trimmedEmail,
-        email:
-          profile.email ||
-          credential.user.email ||
-          trimmedEmail,
-        role: profile.role || "client_owner",
-        workspaceId: profile.workspaceId,
-        createdAt:
-          profile.createdAt ||
-          new Date().toISOString(),
-      };
-
-      if (
-        appUser.role !== "super_admin" &&
-        !appUser.workspaceId
-      ) {
-        await firebaseSignOut(auth);
-
-        addToast(
-          "الحساب غير مربوط بمنشأة. تواصل مع إدارة FOX AI AGENCY.",
-          "error"
-        );
-
-        return false;
-      }
-
-      setCurrentUser(appUser);
-      localStorage.setItem(
-        "fox_user",
-        JSON.stringify(appUser)
-      );
-
-      if (appUser.workspaceId) {
-        setCurrentWorkspaceIdState(
-          appUser.workspaceId
-        );
       }
 
       addToast(
@@ -1233,7 +1703,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (
       !cleanWorkspaceName ||
       !cleanOwnerName ||
-      !cleanEmail
+      !cleanEmail ||
+      !cleanPhone
     ) {
       addToast(
         language === "ar"
@@ -1255,6 +1726,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         "error"
       );
 
+      return null;
+    }
+
+    if (cleanPhone.replace(/\D/g, "").length < 8) {
+      addToast(
+        language === "ar"
+          ? "يرجى إدخال رقم هاتف صحيح."
+          : "Please enter a valid phone number.",
+        "error",
+      );
       return null;
     }
 
@@ -1369,6 +1850,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    const registrationOperation =
+      registrationCoordinatorRef.current.begin(cleanEmail);
+    if (!registrationOperation) {
+      addToast(
+        language === "ar"
+          ? "هناك عملية تسجيل أخرى قيد التنفيذ. انتظر حتى تنتهي."
+          : "Another registration is already in progress. Wait for it to finish.",
+        "error",
+      );
+      return null;
+    }
+
+    let createdUid = "";
+    let createdAuthUser: FirebaseAuthUser | null = null;
+    let registrationCommitAttempted = false;
+    let registrationBatchCommitted = false;
+    let provisionedWorkspace: Workspace | null = null;
+    let authRollbackResult:
+      | Awaited<ReturnType<typeof rollbackCreatedAuthIdentity>>
+      | null = null;
+
     try {
       // -----------------------------------------------------
       // CREATE FIREBASE AUTH IDENTITY
@@ -1383,6 +1885,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const uid =
         credential.user.uid;
+      createdUid = uid;
+      createdAuthUser = credential.user;
+      if (
+        !registrationCoordinatorRef.current.bindUid(
+          registrationOperation,
+          uid,
+        )
+      ) {
+        throw new Error("REGISTRATION_OPERATION_STALE");
+      }
 
       const nowIso =
         new Date().toISOString();
@@ -1399,7 +1911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .toISOString()
           .split("T")[0];
 
-      const newWorkspace: Workspace = {
+      let newWorkspace: Workspace = {
         id: newWsId,
         name: cleanWorkspaceName,
         industry,
@@ -1468,6 +1980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             "auto",
         },
       };
+      provisionedWorkspace = newWorkspace;
 
       const newUser: User = {
         id: uid,
@@ -1479,29 +1992,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
 
       // -----------------------------------------------------
-      // FIRESTORE
+      // TRUSTED SERVER PROVISIONING
       // -----------------------------------------------------
+      registrationCommitAttempted = true;
+      const provisioningResponse = await authenticatedFetch(
+        "/api/registration/provision-workspace",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            workspaceId: newWsId,
+            workspaceName: cleanWorkspaceName,
+            ownerName: cleanOwnerName,
+            phone: cleanPhone,
+            industry,
+          }),
+        },
+      );
+      const provisioningPayload = await provisioningResponse.json();
+      if (!provisioningResponse.ok || !provisioningPayload.success) {
+        const provisioningError: any = new Error(
+          provisioningPayload.error || "Trusted registration failed",
+        );
+        provisioningError.code =
+          provisioningPayload.code || "REGISTRATION_PROVISIONING_FAILED";
+        throw provisioningError;
+      }
 
-      const registrationBatch = writeBatch(db);
-
-      registrationBatch.set(
-        doc(db, "workspaces", newWsId),
-        sanitizeForFirestore(newWorkspace)
+      const authoritativeWorkspace = provisioningPayload.workspace || {};
+      if (
+        authoritativeWorkspace.id !== newWsId ||
+        authoritativeWorkspace.ownerUid !== uid ||
+        authoritativeWorkspace.planId !== "starter" ||
+        !Number.isFinite(
+          authoritativeWorkspace.entitlementExpiresAtMillis,
+        )
+      ) {
+        throw new Error("REGISTRATION_PROVISIONING_RESPONSE_INVALID");
+      }
+      newWorkspace = {
+        ...authoritativeWorkspace,
+        entitlementExpiresAt: Timestamp.fromMillis(
+          authoritativeWorkspace.entitlementExpiresAtMillis,
+        ),
+      } as Workspace;
+      provisionedWorkspace = newWorkspace;
+      registrationBatchCommitted = true;
+      registrationCoordinatorRef.current.settle(
+        registrationOperation,
+        "committed",
       );
 
-      registrationBatch.set(
-        doc(db, "users", uid),
-        sanitizeForFirestore({
-          ...newUser,
-          uid,
-          workspaceId: newWsId,
-          role: "client_owner",
-          active: true,
-          createdAt: nowIso,
-        })
-      );
+      const hydratedUser = await waitForAuthHydration(uid, 0);
+      if (!hydratedUser) {
+        throw new Error("AUTH_PROFILE_HYDRATION_FAILED");
+      }
 
-      await registrationBatch.commit();
+      if (
+        !registrationCoordinatorRef.current.canApplyUi(
+          registrationOperation,
+          mountedRef.current,
+          auth.currentUser?.uid,
+        )
+      ) {
+        throw new Error("REGISTRATION_IDENTITY_CHANGED_AFTER_COMMIT");
+      }
 
       // -----------------------------------------------------
       // MARK ACTIVATION CODE USED
@@ -1576,19 +2130,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ]
       );
 
-      setCurrentUser(
-        newUser
-      );
-
       setCurrentWorkspaceIdState(
         newWsId
-      );
-
-      localStorage.setItem(
-        "fox_user",
-        JSON.stringify(
-          newUser
-        )
       );
 
       localStorage.setItem(
@@ -1645,15 +2188,92 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         error
       );
 
-      const code =
-        String(
-          error?.code || ""
-        );
+      const failureCode = String(error?.code || "");
+
+      // A transport error can arrive after Firestore committed the atomic
+      // batch. Probe the exact documents before classifying it as pre-commit;
+      // if the probe is unavailable, preserve Auth for account recovery.
+      if (
+        registrationCommitAttempted &&
+        !registrationBatchCommitted &&
+        createdUid &&
+        provisionedWorkspace &&
+        auth.currentUser?.uid === createdUid
+      ) {
+        try {
+          const [workspaceSnapshot, profileSnapshot] = await Promise.all([
+            getDoc(doc(db, "workspaces", provisionedWorkspace.id)),
+            getDoc(doc(db, "users", createdUid)),
+          ]);
+          const workspaceData = workspaceSnapshot.data() as any;
+          const profileData = profileSnapshot.data() as any;
+          if (
+            workspaceSnapshot.exists() &&
+            profileSnapshot.exists() &&
+            workspaceData?.ownerUid === createdUid &&
+            profileData?.workspaceId === provisionedWorkspace.id &&
+            profileData?.role === "client_owner"
+          ) {
+            registrationBatchCommitted = true;
+          }
+        } catch (verificationError) {
+          console.warn(
+            "[FOX REGISTRATION] Commit outcome could not be verified:",
+            verificationError,
+          );
+        }
+      }
+
+      registrationCoordinatorRef.current.settle(
+        registrationOperation,
+        registrationBatchCommitted ? "committed" : "failed",
+      );
+
+      if (registrationBatchCommitted && provisionedWorkspace) {
+        if (mountedRef.current) {
+          addToast(
+            language === "ar"
+              ? "تم إنشاء الحساب بنجاح، لكن تعذر إكمال تحديث الواجهة. حدّث الصفحة وسجّل الدخول."
+              : "The account was created, but the local confirmation was interrupted. Refresh and sign in.",
+            "info",
+          );
+        }
+        return provisionedWorkspace;
+      }
+
+      if (
+        createdAuthUser &&
+        createdUid &&
+        shouldRollbackRegistration(registrationOperation.outcome, {
+          commitAttempted: registrationCommitAttempted,
+          failureCode,
+        })
+      ) {
+        authRollbackResult = await rollbackCreatedAuthIdentity({
+          createdUser: createdAuthUser,
+          createdUid,
+          getCurrentUid: () => auth.currentUser?.uid,
+          deleteCreatedUser: (user) => deleteUser(user),
+          signOutCurrentIdentity: () => firebaseSignOut(auth),
+        });
+      }
+
+      const code = failureCode;
 
       let message =
         language === "ar"
           ? "تعذر إنشاء الحساب. حاول مرة أخرى."
           : "Unable to create the account. Please try again.";
+
+      if (
+        createdUid &&
+        authRollbackResult !== "deleted"
+      ) {
+        message =
+          language === "ar"
+            ? "تعذر إكمال التسجيل وقد يكون حساب الدخول موجوداً بالفعل. لا تُنشئ حساباً مكرراً؛ استخدم تسجيل الدخول أو استعادة الحساب."
+            : "Registration was interrupted and the sign-in account may already exist. Do not register again; sign in or recover the account.";
+      }
 
       if (
         code.includes(
@@ -1684,12 +2304,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : "Invalid email address.";
       }
 
-      addToast(
-        message,
-        "error"
-      );
+      if (mountedRef.current) {
+        addToast(
+          message,
+          "error"
+        );
+      }
 
       return null;
+    } finally {
+      registrationCoordinatorRef.current.settle(
+        registrationOperation,
+        registrationBatchCommitted ? "committed" : "failed",
+      );
+      registrationCoordinatorRef.current.finish(registrationOperation);
     }
   };
 
@@ -2227,7 +2855,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // CRM & Industry actions with strict tenant boundary checks
-  const addCustomerLead = (lead: Omit<CustomerLead, "id" | "createdAt">) => {
+  const addCustomerLead = async (lead: Omit<CustomerLead, "id" | "createdAt">): Promise<void> => {
     const targetWsId = !isSuperAdmin ? currentWorkspace?.id || currentUser?.workspaceId : (lead.workspaceId || currentWorkspace?.id);
     if (!targetWsId) return;
 
@@ -2237,7 +2865,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `lead_${Math.random().toString(36).substring(2, 8)}`,
       createdAt: new Date().toISOString().split("T")[0],
     };
-    setCrmLeads((prev) => [newLead, ...prev]); setDoc(doc(db, "crmLeads", newLead.id), newLead).catch(console.error);
+
+    try {
+      await setDoc(
+        doc(db, "workspaces", targetWsId, "crmLeads", newLead.id),
+        newLead,
+      );
+    } catch (error) {
+      console.error("[FOX CRM] Tenant lead create failed:", error);
+      addToast("Failed to create the tenant CRM record.", "error");
+      return;
+    }
+
+    // Legacy root mirror is compatibility-only and is never used for reads.
+    void setDoc(doc(db, "crmLeads", newLead.id), newLead).catch(
+      (error) => {
+        console.warn("[FOX CRM] Root lead compatibility sync failed:", error);
+      },
+    );
     
     // Update workspace totals
     setWorkspaces((prev) =>
@@ -2246,20 +2891,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast("CRM Record created", "success");
   };
 
-  const updateLeadStatus = (leadId: string, status: CustomerLead["status"]) => {
+  const updateLeadStatus = async (leadId: string, status: CustomerLead["status"]): Promise<void> => {
     const existing = crmLeads.find((l) => l.id === leadId);
     if (!existing) return;
     if (!isSuperAdmin && existing.workspaceId !== currentWorkspace?.id) {
       addToast("ليس لديك صلاحية لتعديل بيانات هذا الحساب", "error");
       return;
     }
-    setCrmLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, status } : l))); updateDoc(doc(db, "crmLeads", leadId), { status }).catch(console.error);
+
+    const lastInteraction = new Date().toISOString();
+    try {
+      await updateDoc(
+        doc(
+          db,
+          "workspaces",
+          existing.workspaceId,
+          "crmLeads",
+          leadId,
+        ),
+        { status, lastInteraction },
+      );
+    } catch (error) {
+      console.error("[FOX CRM] Tenant lead status update failed:", error);
+      addToast("Failed to update the tenant CRM record.", "error");
+      return;
+    }
+
+    // Legacy root mirror is compatibility-only.
+    void updateDoc(doc(db, "crmLeads", leadId), { status, lastInteraction }).catch(
+      (error) => {
+        console.warn("[FOX CRM] Root lead compatibility sync failed:", error);
+      },
+    );
     addToast(`Lead status set to ${status}`, "info");
   };
 
-  const addAppointment = (apt: Omit<Appointment, "id">) => {
+  const addAppointment = async (apt: Omit<Appointment, "id">): Promise<boolean> => {
     const targetWsId = !isSuperAdmin ? currentWorkspace?.id || currentUser?.workspaceId : (apt.workspaceId || currentWorkspace?.id);
-    if (!targetWsId) return;
+    if (!targetWsId) return false;
+
+    if (!isValidDateOnlyKey(String(apt.date || ""))) {
+      addToast("Appointment date must use a valid YYYY-MM-DD value.", "error");
+      return false;
+    }
 
     const newApt: Appointment = {
       ...apt,
@@ -2276,28 +2950,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    setAppointments((prev) => [newApt, ...prev]);
+    try {
+      await setDoc(
+        doc(
+          db,
+          "workspaces",
+          targetWsId,
+          "appointments",
+          newApt.id
+        ),
+        syncedApt
+      );
+    } catch (error) {
+      console.warn("[FOX CRM] Tenant appointment create failed:", error);
+      addToast("Failed to create the tenant appointment.", "error");
+      return false;
+    }
 
-    // Root collection used by dashboard realtime sync.
-    setDoc(
+    // Legacy root mirror is compatibility-only and is never used for reads.
+    void setDoc(
       doc(db, "appointments", newApt.id),
-      syncedApt
-    ).catch(console.error);
-
-    // Tenant-isolated source used by FOX AI / Telegram.
-    setDoc(
-      doc(
-        db,
-        "workspaces",
-        targetWsId,
-        "appointments",
-        newApt.id
-      ),
       syncedApt
     ).catch((error) => {
       console.warn(
-        "[FOX CRM] Tenant appointment create sync failed:",
-        error
+        "[FOX Appointments] Root compatibility sync failed:",
+        error,
       );
     });
 
@@ -2310,9 +2987,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     addToast("Appointment scheduled!", "success");
+    return true;
   };
 
-  const updateAppointment = (id: string, updates: Partial<Appointment>) => {
+  const updateAppointment = async (id: string, updates: Partial<Appointment>): Promise<void> => {
     const existing = appointments.find((a) => a.id === id);
     if (!existing) return;
 
@@ -2336,21 +3014,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncedUpdates.time = updates.timeSlot;
     }
 
-    setAppointments((prev) =>
-      prev.map((a) =>
-        a.id === id ? { ...a, ...updates } : a
-      )
-    );
-
-    // Root collection used by the current dashboard.
-    updateDoc(
-      doc(db, "appointments", id),
-      syncedUpdates
-    ).catch(console.error);
-
-    // Tenant-isolated collection used by FOX AI / Telegram.
-    if (existing.workspaceId) {
-      updateDoc(
+    try {
+      await updateDoc(
         doc(
           db,
           "workspaces",
@@ -2358,22 +3023,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           "appointments",
           id
         ),
-        syncedUpdates
-      ).catch((error) => {
-        console.warn(
-          "[FOX CRM] Tenant appointment update sync failed:",
-          error
-        );
-      });
+        syncedUpdates,
+      );
+    } catch (error) {
+      console.warn("[FOX CRM] Tenant appointment update failed:", error);
+      addToast("Failed to update the tenant appointment.", "error");
+      return;
     }
+
+    // Legacy root mirror is compatibility-only.
+    void updateDoc(
+      doc(db, "appointments", id),
+      syncedUpdates
+    ).catch((error) => {
+      console.warn(
+        "[FOX Appointments] Root compatibility sync failed:",
+        error,
+      );
+    });
 
     addToast("Appointment updated", "success");
   };
 
-  const updateAppointmentStatus = (
+  const updateAppointmentStatus = async (
     aptId: string,
     status: Appointment["status"]
-  ) => {
+  ): Promise<void> => {
     const existing = appointments.find((a) => a.id === aptId);
     if (!existing) return;
 
@@ -2390,21 +3065,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : {})
     };
 
-    setAppointments((prev) =>
-      prev.map((a) =>
-        a.id === aptId ? { ...a, status } : a
-      )
-    );
-
-    // Root dashboard collection.
-    updateDoc(
-      doc(db, "appointments", aptId),
-      updates
-    ).catch(console.error);
-
-    // Tenant CRM collection.
-    if (existing.workspaceId) {
-      updateDoc(
+    try {
+      await updateDoc(
         doc(
           db,
           "workspaces",
@@ -2412,14 +3074,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           "appointments",
           aptId
         ),
-        updates
-      ).catch((error) => {
-        console.warn(
-          "[FOX CRM] Tenant appointment status sync failed:",
-          error
-        );
-      });
+        updates,
+      );
+    } catch (error) {
+      console.warn("[FOX CRM] Tenant appointment status update failed:", error);
+      addToast("Failed to update the tenant appointment status.", "error");
+      return;
     }
+
+    // Legacy root mirror is compatibility-only.
+    void updateDoc(
+      doc(db, "appointments", aptId),
+      updates
+    ).catch((error) => {
+      console.warn(
+        "[FOX Appointments] Root compatibility sync failed:",
+        error,
+      );
+    });
 
     addToast(`Appointment status updated: ${status}`, "info");
   };
@@ -3092,7 +3764,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         currentUser,
-        setCurrentUser,
+        authHydrated,
+        workspacesLoading,
+        workspacesError,
         darkMode,
         setDarkMode,
         language,
@@ -3104,8 +3778,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activationCodes,
         payments,
         crmLeads: scopedCrmLeads,
+        crmLeadsLoading,
+        crmLeadsError,
         doctors: scopedDoctors,
         appointments: scopedAppointments,
+        appointmentsLoading,
+        appointmentsError,
         menuItems: scopedMenuItems,
         medicines: scopedMedicines,
         products: scopedProducts,
@@ -3153,7 +3831,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         latestRegistration,
         triggerRegistrationFeedback,
         dismissRegistrationFeedback,
-        loginAs,
         loginWithEmail,
         logout,
         registerWorkspace,

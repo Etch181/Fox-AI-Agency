@@ -172,7 +172,111 @@ after(async () => {
 });
 
 describe("additional cross-tenant and authoritative-data coverage", () => {
-  test("new tenant can create only a baseline starter workspace", async () => {
+  test("missing, malformed, and unknown profile roles cannot access a bound workspace", async () => {
+    await seed("crmLeads/role-guard-record", {
+      workspaceId: WORKSPACE_A,
+      name: "Protected lead",
+    });
+    await seed("payments/role-guard-payment", {
+      workspaceId: WORKSPACE_A,
+      status: "pending",
+    });
+    await seed("gemini_metrics/workspace-a", {
+      workspaceId: WORKSPACE_A,
+      totalCalls: 1,
+    });
+
+    for (const [uid, roleData] of [
+      ["missing-role", {}],
+      ["empty-role", { role: "" }],
+      ["malformed-role", { role: ["client_owner"] }],
+      ["unknown-role", { role: "workspace_admin" }],
+    ] as const) {
+      await seed(`users/${uid}`, {
+        workspaceId: WORKSPACE_A,
+        ...roleData,
+      });
+      const db = authenticatedDb(uid, `${uid}@example.test`);
+
+      await assertFails(getDoc(doc(db, "workspaces", WORKSPACE_A)));
+      await assertFails(getDoc(doc(db, "crmLeads", "role-guard-record")));
+      await assertFails(getDoc(doc(db, "payments", "role-guard-payment")));
+      await assertFails(getDoc(doc(db, "gemini_metrics", WORKSPACE_A)));
+    }
+
+    await seed(`users/${TENANT_A_OWNER}`, {
+      role: "unsupported_owner_role",
+      workspaceId: WORKSPACE_A,
+    });
+    await assertFails(
+      updateDoc(doc(tenantADb(), "workspaces", WORKSPACE_A), {
+        name: "Invalid-role owner mutation",
+      }),
+    );
+  });
+
+  test("valid staff retains workspace-scoped operational access", async () => {
+    const staffUid = "tenant-a-staff";
+    await seed(`users/${staffUid}`, {
+      role: "staff",
+      workspaceId: WORKSPACE_A,
+    });
+    await seed("crmLeads/staff-record", {
+      workspaceId: WORKSPACE_A,
+      name: "Staff lead",
+    });
+
+    const db = authenticatedDb(staffUid, "staff-a@example.test");
+    await assertFails(getDoc(doc(db, "workspaces", WORKSPACE_A)));
+    await assertSucceeds(getDoc(doc(db, "crmLeads", "staff-record")));
+  });
+
+  test("staff cannot bypass owner-only views through direct Firestore access", async () => {
+    const staffUid = "tenant-a-staff";
+    await seed(`users/${staffUid}`, {
+      role: "staff",
+      workspaceId: WORKSPACE_A,
+    });
+
+    const ownerOnlyCollections = [
+      "knowledgeFacts",
+      "coupons",
+      "n8nWorkflows",
+      "marketing_generated_posts",
+    ];
+
+    for (const collectionName of ownerOnlyCollections) {
+      await seed(`${collectionName}/owner-only-record`, {
+        workspaceId: WORKSPACE_A,
+        name: "Owner-only record",
+      });
+      const db = authenticatedDb(staffUid, "staff-a@example.test");
+
+      await assertFails(
+        getDoc(doc(db, collectionName, "owner-only-record")),
+      );
+      await assertFails(
+        setDoc(doc(db, collectionName, "staff-forged-record"), {
+          workspaceId: WORKSPACE_A,
+          name: "Forged by staff",
+        }),
+      );
+    }
+
+    const db = authenticatedDb(staffUid, "staff-a@example.test");
+    await seed("payments/staff-hidden-payment", {
+      workspaceId: WORKSPACE_A,
+      status: "pending",
+    });
+    await seed("gemini_metrics/workspace-a", {
+      workspaceId: WORKSPACE_A,
+      totalCalls: 1,
+    });
+    await assertFails(getDoc(doc(db, "payments", "staff-hidden-payment")));
+    await assertFails(getDoc(doc(db, "gemini_metrics", WORKSPACE_A)));
+  });
+
+  test("browser cannot directly provision even a baseline starter workspace", async () => {
     const baselineWorkspace = {
       id: "workspace-new",
       ownerUid: NEW_TENANT_OWNER,
@@ -202,7 +306,7 @@ describe("additional cross-tenant and authoritative-data coverage", () => {
       aiSettings: { agentName: "New Workspace AI Assistant" },
     };
 
-    await assertSucceeds(
+    await assertFails(
       commitRegistration(
         newTenantDb(),
         NEW_TENANT_OWNER,
@@ -213,10 +317,10 @@ describe("additional cross-tenant and authoritative-data coverage", () => {
     );
   });
 
-  test("atomic profile binding closes the profile-less duplicate window", async () => {
+  test("browser registration batches are denied in favor of trusted provisioning", async () => {
     const db = newTenantDb();
 
-    await assertSucceeds(
+    await assertFails(
       commitRegistration(
         db,
         NEW_TENANT_OWNER,

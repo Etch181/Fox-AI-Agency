@@ -1,9 +1,18 @@
 import React, { useState, useMemo } from "react";
 import { useApp } from "../../../context/AppContext";
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, CalendarClock, User, Phone } from "lucide-react";
+import { formatLocalDateKey } from "../../../utils/dateOnly";
 
 export const BookingCalendar: React.FC = () => {
-  const { appointments, updateAppointmentStatus, updateAppointment, language, currentWorkspace } = useApp();
+  const {
+    appointments,
+    appointmentsLoading,
+    appointmentsError,
+    updateAppointmentStatus,
+    updateAppointment,
+    language,
+    currentWorkspace,
+  } = useApp();
   const isAr = language === "ar";
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -28,11 +37,13 @@ export const BookingCalendar: React.FC = () => {
     setSelectedDate(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day));
   };
 
-  const selectedDateString = selectedDate.toISOString().split("T")[0];
+  // appointment.date is a business DATE-ONLY key. Never pass it through
+  // UTC/ISO conversion because that can move it to an adjacent local day.
+  const selectedDateKey = formatLocalDateKey(selectedDate);
   
   const selectedDayApts = useMemo(() => {
-    return workspaceApts.filter(a => a.date === selectedDateString);
-  }, [workspaceApts, selectedDateString]);
+    return workspaceApts.filter(a => a.date === selectedDateKey);
+  }, [workspaceApts, selectedDateKey]);
 
   const getStatusColor = (status: string) => {
     switch(status) {
@@ -108,7 +119,13 @@ export const BookingCalendar: React.FC = () => {
             ))}
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
-              const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const dateStr = formatLocalDateKey(
+                new Date(
+                  currentMonth.getFullYear(),
+                  currentMonth.getMonth(),
+                  day,
+                ),
+              );
               const hasApts = workspaceApts.some(a => a.date === dateStr);
               const isSelected = selectedDate.getDate() === day && selectedDate.getMonth() === currentMonth.getMonth() && selectedDate.getFullYear() === currentMonth.getFullYear();
               
@@ -140,11 +157,25 @@ export const BookingCalendar: React.FC = () => {
           </h4>
           
           <div className="space-y-3">
-            {selectedDayApts.length === 0 ? (
+            {appointmentsLoading && (
+              <div className="py-10 text-center text-slate-400 text-xs font-medium bg-slate-50 dark:bg-slate-800/30 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
+                {isAr ? "جاري تحميل الحجوزات..." : "Loading appointments..."}
+              </div>
+            )}
+
+            {!appointmentsLoading && appointmentsError && (
+              <div className="py-10 text-center text-rose-500 text-xs font-semibold bg-rose-50 dark:bg-rose-950/20 rounded-xl border border-rose-200 dark:border-rose-900/40">
+                {isAr ? "تعذر تحميل الحجوزات." : "Appointments could not be loaded."}
+              </div>
+            )}
+
+            {!appointmentsLoading && !appointmentsError && selectedDayApts.length === 0 && (
               <div className="py-10 text-center text-slate-400 text-xs font-medium bg-slate-50 dark:bg-slate-800/30 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
                 {isAr ? "لا توجد حجوزات في هذا اليوم." : "No appointments on this day."}
               </div>
-            ) : (
+            )}
+
+            {!appointmentsLoading && !appointmentsError && selectedDayApts.length > 0 && (
               selectedDayApts.map(apt => (
                 <div key={apt.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition hover:border-indigo-300 dark:hover:border-indigo-700">
                   <div className="flex-1">

@@ -41,11 +41,20 @@ service cloud.firestore {
         role() == "super_admin";
     }
 
+    function hasSupportedTenantRole() {
+      return signedIn() &&
+        (
+          role() == "client_owner" ||
+          role() == "staff"
+        );
+    }
+
     function isWorkspaceMember(workspaceId) {
       return signedIn() &&
         (
           isSuperAdmin() ||
           (
+            hasSupportedTenantRole() &&
             userWorkspaceId() == workspaceId &&
             exists(
               /databases/$(database)/documents/workspaces/$(workspaceId)
@@ -64,6 +73,7 @@ service cloud.firestore {
 
     function isWorkspaceOwner(workspaceId) {
       return signedIn() &&
+        role() == "client_owner" &&
         userWorkspaceId() == workspaceId &&
         (
           !resource.data.keys().hasAny(["status"]) ||
@@ -81,6 +91,31 @@ service cloud.firestore {
       return isWorkspaceMember(workspaceId);
     }
 
+    function canManageOwnerOnlyWorkspaceData(workspaceId) {
+      return signedIn() &&
+        (
+          isSuperAdmin() ||
+          (
+            role() == "client_owner" &&
+            userWorkspaceId() == workspaceId &&
+            exists(
+              /databases/$(database)/documents/workspaces/$(workspaceId)
+            ) &&
+            get(
+              /databases/$(database)/documents/workspaces/$(workspaceId)
+            ).data.ownerUid == request.auth.uid &&
+            (
+              get(
+                /databases/$(database)/documents/workspaces/$(workspaceId)
+              ).data.keys().hasAny(["status"]) == false ||
+              get(
+                /databases/$(database)/documents/workspaces/$(workspaceId)
+              ).data.status != "deleted"
+            )
+          )
+        );
+    }
+
     function ownsResource() {
       return hasWorkspaceId(resource.data) &&
         canAccessWorkspaceId(resource.data.workspaceId);
@@ -89,6 +124,18 @@ service cloud.firestore {
     function ownsNewResource() {
       return hasWorkspaceId(request.resource.data) &&
         canAccessWorkspaceId(request.resource.data.workspaceId);
+    }
+
+    function ownsOwnerOnlyResource() {
+      return hasWorkspaceId(resource.data) &&
+        canManageOwnerOnlyWorkspaceData(resource.data.workspaceId);
+    }
+
+    function ownsNewOwnerOnlyResource() {
+      return hasWorkspaceId(request.resource.data) &&
+        canManageOwnerOnlyWorkspaceData(
+          request.resource.data.workspaceId
+        );
     }
 
     function keepsWorkspaceId() {
@@ -160,17 +207,9 @@ service cloud.firestore {
           isSuperAdmin()
         );
 
-      // FOX PRODUCTION REGISTRATION:
-      // A newly authenticated user may create only their own
-      // client_owner profile, and only for a workspace that
-      // already declares them as ownerUid.
-      allow create: if signedIn() &&
-        request.auth.uid == userId &&
-        request.resource.data.role == "client_owner" &&
-        request.resource.data.workspaceId is string &&
-        getAfter(
-          /databases/$(database)/documents/workspaces/$(request.resource.data.workspaceId)
-        ).data.ownerUid == request.auth.uid;
+      // Registration profiles are provisioned only by the trusted Admin SDK
+      // transaction that also claims the normalized email and phone.
+      allow create: if false;
 
       // Client cannot elevate role or jump between tenants.
       allow update: if signedIn() &&
@@ -191,74 +230,12 @@ service cloud.firestore {
     // ========================================================
 
     match /workspaces/{workspaceId} {
-      allow read: if isWorkspaceMember(workspaceId) &&
+      allow read: if canManageOwnerOnlyWorkspaceData(workspaceId) &&
         containsNoWorkspaceSecrets(resource.data);
 
-      // FOX PRODUCTION REGISTRATION:
-      //
-      // createUserWithEmailAndPassword authenticates the user first.
-      // The first workspace may therefore be created before users/{uid}.
-      //
-      // Critical protections:
-      // - document must not already exist
-      // - ownerUid must be the authenticated Firebase UID
-      // - client cannot choose another owner
-      allow create: if
-        (
-          signedIn() &&
-          !hasUserProfile() &&
-          !exists(
-            /databases/$(database)/documents/workspaces/$(workspaceId)
-          ) &&
-          request.resource.data.keys().hasAll([
-            "id", "ownerUid", "ownerEmail", "name", "industry",
-            "ownerName", "phone", "status", "planId",
-            "subscriptionExpiresAt", "entitlementExpiresAt",
-            "aiConversationsUsed",
-            "totalCustomers", "totalAppointments", "totalComplaints",
-            "createdAt", "registrationSource", "onboardingStatus",
-            "onboardingCompleted", "onboardingStep",
-            "businessDescription", "onboardingAiReady",
-            "onboardingCatalogReady", "aiSettings"
-          ]) &&
-          request.resource.data.keys().hasOnly([
-            "id", "ownerUid", "ownerEmail", "name", "industry",
-            "ownerName", "phone", "status", "planId",
-            "subscriptionExpiresAt", "entitlementExpiresAt",
-            "aiConversationsUsed",
-            "totalCustomers", "totalAppointments", "totalComplaints",
-            "createdAt", "registrationSource", "onboardingStatus",
-            "onboardingCompleted", "onboardingStep",
-            "businessDescription", "onboardingAiReady",
-            "onboardingCatalogReady", "aiSettings"
-          ]) &&
-          request.resource.data.id == workspaceId &&
-          request.resource.data.ownerUid == request.auth.uid &&
-          request.resource.data.ownerEmail == request.auth.token.email &&
-          getAfter(
-            /databases/$(database)/documents/users/$(request.auth.uid)
-          ).data.workspaceId == workspaceId &&
-          getAfter(
-            /databases/$(database)/documents/users/$(request.auth.uid)
-          ).data.role == "client_owner" &&
-          request.resource.data.status == "active" &&
-          request.resource.data.planId == "starter" &&
-          request.resource.data.subscriptionExpiresAt is string &&
-          request.resource.data.entitlementExpiresAt is timestamp &&
-          request.resource.data.entitlementExpiresAt > request.time &&
-          request.resource.data.entitlementExpiresAt <=
-            request.time + duration.value(31, "d") &&
-          request.resource.data.aiConversationsUsed == 0 &&
-          request.resource.data.totalCustomers == 0 &&
-          request.resource.data.totalAppointments == 0 &&
-          request.resource.data.totalComplaints == 0 &&
-          request.resource.data.registrationSource == "web_portal" &&
-          request.resource.data.onboardingStatus == "in_progress" &&
-          request.resource.data.onboardingCompleted == false &&
-          request.resource.data.onboardingStep == 1 &&
-          request.resource.data.onboardingAiReady == false &&
-          request.resource.data.onboardingCatalogReady == false
-        );
+      // Starter workspaces are created only by the trusted Admin SDK
+      // transaction after it acquires unique trial claim documents.
+      allow create: if false;
 
       // Tenant owners can change an explicit set of operational
       // fields. Members and future unknown fields default to deny.
@@ -425,18 +402,18 @@ service cloud.firestore {
     }
 
     match /knowledgeFacts/{docId} {
-      allow read, delete: if ownsResource();
-      allow create: if ownsNewResource();
-      allow update: if ownsResource() &&
-        ownsNewResource() &&
+      allow read, delete: if ownsOwnerOnlyResource();
+      allow create: if ownsNewOwnerOnlyResource();
+      allow update: if ownsOwnerOnlyResource() &&
+        ownsNewOwnerOnlyResource() &&
         keepsWorkspaceId();
     }
 
     match /coupons/{docId} {
-      allow read, delete: if ownsResource();
-      allow create: if ownsNewResource();
-      allow update: if ownsResource() &&
-        ownsNewResource() &&
+      allow read, delete: if ownsOwnerOnlyResource();
+      allow create: if ownsNewOwnerOnlyResource();
+      allow update: if ownsOwnerOnlyResource() &&
+        ownsNewOwnerOnlyResource() &&
         keepsWorkspaceId();
     }
 
@@ -481,18 +458,18 @@ service cloud.firestore {
     }
 
     match /n8nWorkflows/{docId} {
-      allow read, delete: if ownsResource();
-      allow create: if ownsNewResource();
-      allow update: if ownsResource() &&
-        ownsNewResource() &&
+      allow read, delete: if ownsOwnerOnlyResource();
+      allow create: if ownsNewOwnerOnlyResource();
+      allow update: if ownsOwnerOnlyResource() &&
+        ownsNewOwnerOnlyResource() &&
         keepsWorkspaceId();
     }
 
     match /marketing_generated_posts/{docId} {
-      allow read, delete: if ownsResource();
-      allow create: if ownsNewResource();
-      allow update: if ownsResource() &&
-        ownsNewResource() &&
+      allow read, delete: if ownsOwnerOnlyResource();
+      allow create: if ownsNewOwnerOnlyResource();
+      allow update: if ownsOwnerOnlyResource() &&
+        ownsNewOwnerOnlyResource() &&
         keepsWorkspaceId();
     }
 
@@ -502,13 +479,9 @@ service cloud.firestore {
 
     match /payments/{paymentId} {
 
-      // Tenant can see its own payment.
-      // Super Admin sees all.
-      allow read: if signedIn() &&
-        (
-          isSuperAdmin() ||
-          resource.data.workspaceId == userWorkspaceId()
-        );
+      // Billing submissions are owner-only; Super Admin sees all.
+      allow read: if hasWorkspaceId(resource.data) &&
+        canManageOwnerOnlyWorkspaceData(resource.data.workspaceId);
 
       // Submission and transitions are authoritative server-only.
       allow create, update, delete: if false;
@@ -565,8 +538,8 @@ service cloud.firestore {
     match /gemini_metrics/{workspaceId} {
       allow read: if isSuperAdmin() ||
         (
-          signedIn() &&
-          resource.data.workspaceId == userWorkspaceId()
+          hasWorkspaceId(resource.data) &&
+          canManageOwnerOnlyWorkspaceData(resource.data.workspaceId)
         );
 
       // The existing diagnostic dashboard persists metrics from a

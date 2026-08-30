@@ -1,0 +1,66 @@
+name: fox-n8n-staging
+
+services:
+  n8n:
+    image: n8nio/n8n:2.35.0
+    container_name: fox-n8n-staging
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_HOST:?required}
+      N8N_PROTOCOL: https
+      N8N_PORT: 5678
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
+      N8N_WEBHOOK_URL: https://${N8N_HOST}/
+      N8N_PROXY_HOPS: 1
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?required}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_SECURE_COOKIE: "true"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 336
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Africa/Cairo}
+      TZ: ${GENERIC_TIMEZONE:-Africa/Cairo}
+      FOX_INTERNAL_BASE_URL: ${FOX_INTERNAL_BASE_URL:?required}
+      FOX_N8N_SHARED_SECRET: ${FOX_N8N_SHARED_SECRET:?required}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - traefik_proxy
+      - fox_staging
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?required}
+      traefik.http.routers.fox-n8n-staging-editor.rule: Host(`${N8N_HOST}`) && !PathPrefix(`/webhook`) && !PathPrefix(`/webhook-test`)
+      traefik.http.routers.fox-n8n-staging-editor.entrypoints: websecure
+      traefik.http.routers.fox-n8n-staging-editor.tls: "true"
+      traefik.http.routers.fox-n8n-staging-editor.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.fox-n8n-staging-editor.middlewares: fox-n8n-staging-auth
+      traefik.http.middlewares.fox-n8n-staging-auth.basicauth.users: ${N8N_BASIC_AUTH_USERS:?required}
+      traefik.http.routers.fox-n8n-staging-webhooks.rule: Host(`${N8N_HOST}`) && (PathPrefix(`/webhook`) || PathPrefix(`/webhook-test`))
+      traefik.http.routers.fox-n8n-staging-webhooks.entrypoints: websecure
+      traefik.http.routers.fox-n8n-staging-webhooks.tls: "true"
+      traefik.http.routers.fox-n8n-staging-webhooks.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.services.fox-n8n-staging.loadbalancer.server.port: "5678"
+
+volumes:
+  n8n_data:
+    name: fox_n8n_staging_data
+
+networks:
+  traefik_proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:?required}
+  fox_staging:
+    external: true
+    name: ${FOX_STAGING_NETWORK:?required}

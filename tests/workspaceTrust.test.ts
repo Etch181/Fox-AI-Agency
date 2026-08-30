@@ -5,6 +5,7 @@ import {
   authoritativeWorkspaceFromDocument,
   authoritativeWorkspaceToAdminDto,
   authoritativeWorkspaceToClientDto,
+  authoritativeWorkspaceToStaffDto,
   refreshAuthoritativeWorkspaceCache,
   sanitizeAuthoritativeWorkspaceForRuntime,
 } from "../src/services/workspaceTrust.ts";
@@ -108,4 +109,24 @@ test("cache refresh accepts identifiers and trusted loader output only", async (
   assert.equal(refreshed[0].status, "active");
   assert.equal(refreshed[0].ownerUid, "owner-a");
   assert.equal(refreshed[0].entitlementExpiresAt, timestamp);
+});
+
+test("staff workspace DTO exposes operational context without owner configuration or PII", () => {
+  const dto = authoritativeWorkspaceToStaffDto(authoritative);
+
+  assert.deepEqual(Object.keys(dto).sort(), [
+    "entitlementExpiresAtMillis",
+    "id",
+    "industry",
+    "name",
+    "planId",
+    "status",
+  ]);
+  assert.equal(dto.entitlementExpiresAtMillis, 1_777_000_000_000);
+  assert.equal("ownerEmail" in dto, false);
+  assert.equal("ownerName" in dto, false);
+  assert.equal("ownerUid" in dto, false);
+  assert.equal("phone" in dto, false);
+  assert.equal("aiSettings" in dto, false);
+  assert.equal("subscriptionExpiresAt" in dto, false);
 });

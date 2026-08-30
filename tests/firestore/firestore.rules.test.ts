@@ -72,7 +72,7 @@ async function seedBaseData() {
       }),
       setDoc(doc(db, "users", TENANT_A_MEMBER), {
         name: "Tenant A Member",
-        role: "client_member",
+        role: "staff",
         workspaceId: WORKSPACE_A,
       }),
       setDoc(doc(db, "users", TENANT_B_OWNER), {

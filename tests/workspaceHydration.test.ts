@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../src/context/AppContext.tsx", import.meta.url),
   "utf8",
 );
+const serverSource = readFileSync(
+  new URL("../server.ts", import.meta.url),
+  "utf8",
+);
 
 test("workspace hydration uses tenant document listeners and admin DTO API", () => {
   const start = source.indexOf("// Tenant workspaces use a direct document listener");
@@ -21,4 +25,13 @@ test("workspace hydration uses tenant document listeners and admin DTO API", () 
   assert.match(hydration, /authenticatedFetch\("\/api\/agency\/clients"/);
   assert.doesNotMatch(hydration, /query\(workspacesRef/);
   assert.doesNotMatch(hydration, /onSnapshot\(\s*q/);
+});
+
+test("Super Admin directory GET re-reads authoritative Firestore rather than serving cache only", () => {
+  const start = serverSource.indexOf('"/api/agency/clients"');
+  const end = serverSource.indexOf('"/api/agency/clients/refresh"', start);
+  const route = serverSource.slice(start, end);
+  assert.match(route, /secureAsyncRoute/);
+  assert.match(route, /adminDb\s*\.collection\("workspaces"\)\s*\.get\(\)/);
+  assert.match(route, /registeredWorkspacesStore\s*=\s*firestoreWorkspaces/);
 });
