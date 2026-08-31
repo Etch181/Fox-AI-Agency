@@ -9,8 +9,8 @@
 # ---- Stage 1: Builder ----
 FROM node:24-alpine AS builder
 
-# Install ca-certificates for HTTPS outbound calls
-RUN apk add --no-cache ca-certificates python3
+# Git is required only in this builder stage by the staging preflight fixture tests.
+RUN apk add --no-cache ca-certificates python3 git
 
 WORKDIR /app
 
