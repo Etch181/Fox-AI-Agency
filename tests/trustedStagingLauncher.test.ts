@@ -14,6 +14,7 @@ function source(path: string) {
 
 test("external trusted launcher acquires only the pinned remote tree and snapshots staging inputs", () => {
   const launcher = source(launcherPath);
+  const handoff = source(handoffPath);
 
   assert.doesNotMatch(launcher, /APPROVED_COMMIT/);
   assert.doesNotMatch(launcher, /[0-9a-f]{40}/);
@@ -51,8 +52,10 @@ test("external trusted launcher acquires only the pinned remote tree and snapsho
   assert.match(launcher, /copy_release_snapshot/);
   assert.match(launcher, /verify_snapshot/);
   assert.match(launcher, /env -i/);
-  assert.match(launcher, /fox-ai-agency-staging/);
-  assert.match(launcher, /fox-ai-staging/);
+  assert.doesNotMatch(launcher, /name: fox-ai-agency-staging/);
+  assert.doesNotMatch(launcher, /compose project mismatch/);
+  assert.match(handoff, /COMPOSE_PROJECT="fox-ai-staging"/);
+  assert.match(handoff, /Resolved Compose project is not/);
   assert.match(launcher, /staging\.foxaiagency\.online/);
 });
 

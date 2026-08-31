@@ -16,6 +16,7 @@ COMPOSE="${FOX_STAGING_RELEASE_COMPOSE}"
 ENV_FILE="${FOX_STAGING_RELEASE_ENV_FILE}"
 RELEASE_MANIFEST="${FOX_STAGING_RELEASE_MANIFEST}"
 CONTAINER="fox-ai-staging"
+COMPOSE_PROJECT="fox-ai-staging"
 BASE_URL="https://staging.foxaiagency.online"
 WORKSPACE_ID="ws_tg_924598"
 EXPECTED_TELEGRAM_WEBHOOK="${BASE_URL}/api/telegram/webhook/${WORKSPACE_ID}"
@@ -365,17 +366,23 @@ python3 - \
   "$CONFIG_JSON" \
   "$SERVICE" \
   "$SOURCE" \
-  "$CONTAINER" <<'PY'
+  "$CONTAINER" \
+  "$COMPOSE_PROJECT" <<'PY'
 import json
 import os
 import sys
 
-config_path, service_name, expected_source, expected_container = (
+config_path, service_name, expected_source, expected_container, expected_project = (
     sys.argv[1:]
 )
 
 with open(config_path, encoding="utf-8") as handle:
     config = json.load(handle)
+
+if config.get("name") != expected_project:
+    raise SystemExit(
+        f"Resolved Compose project is not {expected_project}"
+    )
 
 service = config.get("services", {}).get(service_name)
 

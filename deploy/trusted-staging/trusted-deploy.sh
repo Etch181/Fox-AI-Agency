@@ -216,7 +216,7 @@ verify_snapshot() {
   [ "$(sha256 "$release/.env.staging")" = "$ENV_SHA" ] || fail 'snapshot env hash mismatch'
   [ "$(sha256 "$release/credentials/firebase-admin.json")" = "$CREDENTIAL_SHA" ] || fail 'snapshot credential hash mismatch'
   [ "$(tree_hash "$release/source")" = "$TREE_SHA" ] || fail 'snapshot tree hash mismatch'
-  /usr/bin/grep -Fqx 'name: fox-ai-agency-staging' "$release/docker-compose.yml" || fail 'compose project mismatch'
+  # Compose project identity is validated from Docker Compose resolved JSON in the handoff.
   /usr/bin/grep -Fq 'context: ./source' "$release/docker-compose.yml" || fail 'compose build context is not snapshot-local'
   /usr/bin/grep -Fq './credentials/firebase-admin.json' "$release/docker-compose.yml" || fail 'compose credential is not snapshot-local'
   ! /usr/bin/grep -Fq "$ENV_SOURCE" "$release/docker-compose.yml" || fail 'mutable env remains in snapshot compose'
