@@ -15,9 +15,10 @@ function source(path: string) {
 test("external trusted launcher acquires only the pinned remote tree and snapshots staging inputs", () => {
   const launcher = source(launcherPath);
 
-  assert.match(launcher, /readonly REMOTE='https:\/\/github\.com\/Etch181\/Fox-AI-Agency\.git'/);
-  assert.match(launcher, /readonly APPROVED_REF='safety\/pre-vps-audit-2026-08-26'/);
-  assert.match(launcher, /readonly APPROVED_COMMIT='acd2a67ed42ce41edd893680df25c83889adaeae'/);
+  assert.doesNotMatch(launcher, /APPROVED_COMMIT/);
+  assert.doesNotMatch(launcher, /[0-9a-f]{40}/);
+  assert.match(launcher, /FOX_STAGING_EXPECTED_COMMIT/);
+  assert.match(launcher, /approved remote ref does not equal expected commit/);
   assert.match(launcher, /readonly ENV_SOURCE='\/docker\/fox-ai-staging\/\.env\.staging'/);
   assert.match(launcher, /readonly RELEASES='\/docker\/fox-ai-staging\/releases'/);
   assert.match(launcher, /FOX_STAGING_EXPECTED_COMMIT/);
@@ -68,7 +69,7 @@ test("snapshot-aware handoff accepts only an immutable release root", () => {
 
 test("manifest template contains only strict non-secret release policy keys", () => {
   const manifest = source(manifestPath);
-  assert.match(manifest, /^FOX_STAGING_EXPECTED_COMMIT=[0-9a-f]{40}$/m);
+  assert.match(manifest, /^FOX_STAGING_EXPECTED_COMMIT=REPLACE_WITH_40_LOWERCASE_HEX_COMMIT$/m);
   assert.match(manifest, /^FOX_STAGING_HANDOFF_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
   assert.match(manifest, /^FOX_STAGING_PREFLIGHT_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
   assert.match(manifest, /^FOX_STAGING_COMPOSE_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);

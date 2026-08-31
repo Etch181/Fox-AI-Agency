@@ -15,7 +15,6 @@ readonly ENV_SOURCE='/docker/fox-ai-staging/.env.staging'
 readonly CREDENTIAL_SOURCE='/docker/fox-ai-staging/secrets/firebase-admin.json'
 readonly REMOTE='https://github.com/Etch181/Fox-AI-Agency.git'
 readonly APPROVED_REF='safety/pre-vps-audit-2026-08-26'
-readonly APPROVED_COMMIT='acd2a67ed42ce41edd893680df25c83889adaeae'
 readonly STAGING_PROJECT='fox-ai-agency-staging'
 readonly STAGING_CONTAINER='fox-ai-staging'
 readonly STAGING_DOMAIN='staging.foxaiagency.online'
@@ -74,7 +73,6 @@ load_manifest() {
     esac
   done < "$MANIFEST"
   is_commit "$EXPECTED_COMMIT" || fail 'malformed expected commit'
-  [ "$EXPECTED_COMMIT" = "$APPROVED_COMMIT" ] || fail 'manifest commit is not the approved remote commit'
   is_sha256 "$HANDOFF_SHA" || fail 'malformed handoff hash'
   is_sha256 "$PREFLIGHT_SHA" || fail 'malformed preflight hash'
   is_sha256 "$COMPOSE_SHA" || fail 'malformed compose hash'
