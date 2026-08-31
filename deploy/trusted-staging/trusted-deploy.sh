@@ -167,12 +167,16 @@ acquire_remote_source() {
 
 generate_snapshot_compose() {
   local root=$1
-  /usr/bin/sed \
-    -e 's#^\([[:space:]]*context:[[:space:]]*\).*#\1./source#' \
-    -e 's#^\([[:space:]]*env_file:[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
-    -e 's#^\([[:space:]]*-[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
-    -e 's#/docker/fox-ai-staging/secrets/firebase-admin.json#./credentials/firebase-admin.json#g' \
-    "$root/docker-compose.source.yml" > "$root/docker-compose.yml"
+  {
+    printf '%s\n' 'name: fox-ai-staging'
+    /usr/bin/sed \
+      -e 's#^\([[:space:]]*context:[[:space:]]*\).*#\1./source#' \
+      -e 's#^\([[:space:]]*env_file:[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
+      -e 's#^\([[:space:]]*-[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
+      -e 's#/docker/fox-ai-staging/secrets/firebase-admin.json#./credentials/firebase-admin.json#g' \
+      "$root/docker-compose.source.yml"
+  } > "$root/docker-compose.yml"
+  /usr/bin/grep -Fqx 'name: fox-ai-staging' "$root/docker-compose.yml" || fail 'snapshot compose project identity missing'
   /usr/bin/grep -Fqx '      context: ./source' "$root/docker-compose.yml" || fail 'snapshot compose context rewrite failed'
   /usr/bin/grep -Fq './.env.staging' "$root/docker-compose.yml" || fail 'snapshot env rewrite failed'
   /usr/bin/grep -Fq './credentials/firebase-admin.json' "$root/docker-compose.yml" || fail 'snapshot credential rewrite failed'

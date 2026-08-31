@@ -100,6 +100,7 @@ on_error() {
     printf '\nAttempting automatic rollback to the pre-deploy staging image...\n'
     docker tag "$ROLLBACK_TAG" "$PREVIOUS_IMAGE_REF"
     docker compose \
+      -p "$COMPOSE_PROJECT" \
       -f "$COMPOSE" \
       --env-file "$ENV_FILE" \
       up -d --no-deps --force-recreate "$SERVICE"
@@ -358,6 +359,7 @@ printf 'Staging container=%s compose_service=%s\n' \
   "$SERVICE"
 
 docker compose \
+  -p "$COMPOSE_PROJECT" \
   -f "$COMPOSE" \
   --env-file "$ENV_FILE" \
   config --format json >"$CONFIG_JSON"
@@ -585,6 +587,7 @@ PY
 printf '\n=== 6. BUILD UPDATED STAGING IMAGE FROM SHARED SOURCE ===\n'
 
 docker compose \
+  -p "$COMPOSE_PROJECT" \
   -f "$COMPOSE" \
   --env-file "$ENV_FILE" \
   build \
@@ -607,6 +610,7 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Set before Compose changes anything so a partial recreate also rolls back.
 DEPLOY_RECREATED=1
 docker compose \
+  -p "$COMPOSE_PROJECT" \
   -f "$COMPOSE" \
   --env-file "$ENV_FILE" \
   up -d \
