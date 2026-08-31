@@ -145,4 +145,8 @@ test("staging handoff excludes env secrets, requires a clean tree, and verifies 
   assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);
   assert.match(deploymentSource, /Automated deployment checks: PASS/);
   assert.doesNotMatch(deploymentSource, /Deployment result: PASS/);
+  assert.doesNotMatch(deploymentSource, /activeTab\.startsWith\(\\"admin_\\"\)/);
+  assert.match(deploymentSource, /resolveAuthorizedView/);
+  assert.match(deploymentSource, /const activeTab: ViewTab/);
+  assert.match(deploymentSource, /setRequestedView\(authorized\)/);
 });

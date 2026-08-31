@@ -179,8 +179,9 @@ required_source_checks = {
         "compatibility-only",
     ],
     "src/App.tsx": [
-        'activeTab.startsWith("admin_")',
-        "return isSuperAdmin ?",
+        "resolveAuthorizedView",
+        "const activeTab: ViewTab",
+        "setRequestedView(authorized)",
         "Loading authorized workspaces",
     ],
     "src/utils/workspaceHydration.ts": [
