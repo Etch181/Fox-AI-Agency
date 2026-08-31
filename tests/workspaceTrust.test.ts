@@ -76,6 +76,16 @@ test("runtime workspace keeps authoritative Timestamp behavior but no secrets", 
   assert.deepEqual(runtime.aiSettings, { agentName: "Fox" });
 });
 
+test("runtime workspace retains non-secret Meta page routing identity", () => {
+  const runtime = sanitizeAuthoritativeWorkspaceForRuntime({
+    id: "ws_meta",
+    metaPageId: "page_123",
+    facebookPageAccessToken: "x",
+  });
+  assert.equal(runtime.metaPageId, "page_123");
+  assert.equal(runtime.facebookPageAccessToken, undefined);
+});
+
 test("Firestore document ID always overrides stored workspace id", () => {
   const workspace = authoritativeWorkspaceFromDocument("document-id", {
     id: "forged-data-id",

@@ -19,6 +19,7 @@ import {
   decryptSecret,
 } from "./src/services/secretService";
 import {
+  createHmac,
   createHash,
   randomBytes,
   scryptSync,
@@ -3866,6 +3867,10 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
     doctors,
     knowledgeBase,
     coupons,
+    menu,
+    medicines,
+    products,
+    courses,
   ] = await Promise.all([
     getWorkspaceSecret(workspaceId, "googleSheetsAccessToken"),
     getWorkspaceSecret(workspaceId, "externalCrmWebhookUrl"),
@@ -3873,6 +3878,10 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
     workspaceDataService.getDoctors(workspaceId),
     workspaceDataService.getKnowledgeFacts(workspaceId),
     workspaceDataService.getCoupons(workspaceId),
+    workspaceDataService.getMenuItems(workspaceId),
+    workspaceDataService.getMedicines(workspaceId),
+    workspaceDataService.getProducts(workspaceId),
+    workspaceDataService.getCourses(workspaceId),
   ]);
 
   // These queries are all constrained by the authoritative workspace ID.
@@ -3882,6 +3891,10 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
   runtimeWorkspace.doctors = doctors;
   runtimeWorkspace.knowledgeBase = knowledgeBase;
   runtimeWorkspace.coupons = coupons;
+  runtimeWorkspace.menu = menu;
+  runtimeWorkspace.medicines = medicines;
+  runtimeWorkspace.products = products;
+  runtimeWorkspace.courses = courses;
 
   if (sheetsToken) {
     runtimeWorkspace.googleSheetsAccessToken = sheetsToken;
@@ -4553,9 +4566,39 @@ function getWorkspaceTelegramWebhookUrl(
   )}`;
 }
 
+function getWorkspaceTelegramWebhookSecret(workspaceId: string): string {
+  const masterSecret = String(process.env.FOX_SECRET_KEY || "").trim();
+  if (!masterSecret) {
+    throw new Error("FOX_SECRET_KEY_REQUIRED_FOR_TELEGRAM_WEBHOOK");
+  }
+
+  return createHmac("sha256", masterSecret)
+    .update(`telegram-webhook:${workspaceId}`)
+    .digest("base64url");
+}
+
+function isValidWorkspaceTelegramWebhookSecret(
+  workspaceId: string,
+  provided: string,
+): boolean {
+  const expectedBuffer = Buffer.from(
+    getWorkspaceTelegramWebhookSecret(workspaceId)
+  );
+  const providedBuffer = Buffer.from(String(provided || ""));
+  return expectedBuffer.length === providedBuffer.length &&
+    timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
 async function configureWorkspaceTelegramWebhook(
   workspaceId: string
 ) {
+  if (!INTEGRATION_FLAGS.telegram) {
+    return {
+      ok: false,
+      code: "TELEGRAM_INTEGRATION_DISABLED",
+    };
+  }
+
   const workspace = getWorkspaceById(workspaceId);
 
   if (!workspace) {
@@ -4617,6 +4660,7 @@ async function configureWorkspaceTelegramWebhook(
       "setWebhook",
       {
         url: webhookUrl,
+        secret_token: getWorkspaceTelegramWebhookSecret(workspaceId),
         drop_pending_updates: false,
         allowed_updates: ["message"],
       }
@@ -4780,6 +4824,13 @@ async function startWorkspaceTelegramPolling(workspaceId: string) {
 }
 
 async function syncWorkspaceTelegramBots() {
+  if (!INTEGRATION_FLAGS.telegram) {
+    for (const workspaceId of [...workspaceTelegramPollers.keys()]) {
+      await stopWorkspaceTelegramPolling(workspaceId);
+    }
+    return;
+  }
+
   for (const workspace of registeredWorkspacesStore) {
     if (!workspace?.id) continue;
 
@@ -4819,12 +4870,32 @@ async function syncWorkspaceTelegramBots() {
 app.post(
   "/api/telegram/webhook/:workspaceId",
   async (req, res) => {
+    if (!INTEGRATION_FLAGS.telegram) {
+      return res.status(503).json({
+        ok: false,
+        error: "Telegram integration disabled",
+      });
+    }
+
     const workspace = getWorkspaceById(req.params.workspaceId);
 
     if (!workspace) {
       return res.status(404).json({
         ok: false,
         error: "Workspace not found",
+      });
+    }
+
+    const providedSecret = String(
+      req.header("x-telegram-bot-api-secret-token") || ""
+    );
+    if (
+      !providedSecret ||
+      !isValidWorkspaceTelegramWebhookSecret(workspace.id, providedSecret)
+    ) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid Telegram webhook secret",
       });
     }
 
@@ -5146,6 +5217,14 @@ app.post(
 
     if (!workspace) {
       return;
+    }
+
+    if (!INTEGRATION_FLAGS.telegram) {
+      return res.status(503).json({
+        success: false,
+        code: "TELEGRAM_INTEGRATION_DISABLED",
+        error: "Telegram integration is disabled",
+      });
     }
 
     const access =

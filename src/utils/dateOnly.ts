@@ -34,6 +34,51 @@ export function formatDateKeyInTimeZone(
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
 
+export function isBusinessDateTimeInPast(
+  date: string,
+  time: string,
+  now = new Date(),
+  timeZone = "Africa/Cairo",
+): boolean {
+  if (!isValidDateOnlyKey(date)) return true;
+
+  const timeMatch = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(
+    String(time || "").trim(),
+  );
+  if (!timeMatch) return true;
+
+  let requestedHour = Number(timeMatch[1]);
+  const requestedMinute = Number(timeMatch[2]);
+  if (
+    requestedHour < 1 ||
+    requestedHour > 12 ||
+    requestedMinute < 0 ||
+    requestedMinute > 59
+  ) {
+    return true;
+  }
+  const period = timeMatch[3].toUpperCase();
+  requestedHour %= 12;
+  if (period === "PM") requestedHour += 12;
+
+  const today = formatDateKeyInTimeZone(now, timeZone);
+  if (date < today) return true;
+  if (date > today) return false;
+
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const byType = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+  const currentMinutes = Number(byType.hour) * 60 + Number(byType.minute);
+  const requestedMinutes = requestedHour * 60 + requestedMinute;
+  return requestedMinutes <= currentMinutes;
+}
+
 export function isValidDateOnlyKey(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
     String(value || ""),

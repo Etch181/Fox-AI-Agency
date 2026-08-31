@@ -90,8 +90,8 @@ console.log(JSON.stringify({
     price: Number.isFinite(Number(doc.data().price)) ? Number(doc.data().price) : null,
     available: doc.data().available !== false,
   })),
-  approvedKnowledgeFacts: knowledgeFacts.docs.filter((doc) => doc.data().approved !== false).length,
-  activeAiCoupons: coupons.docs.filter((doc) => doc.data().isActive !== false && doc.data().aiCanUse !== false).map((doc) => doc.data().code || doc.id),
+  approvedKnowledgeFacts: knowledgeFacts.docs.filter((doc) => doc.data().approved === true).length,
+  activeAiCoupons: coupons.docs.filter((doc) => doc.data().isActive === true && doc.data().aiCanUse === true).map((doc) => doc.data().code || doc.id),
   conversations: conversations.size,
   sharedMemorySessions: memory.size,
 }, null, 2));

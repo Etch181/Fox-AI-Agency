@@ -577,7 +577,7 @@ ${message}
     }
 
     const approvedKnowledge = (workspace.knowledgeBase || [])
-      .filter((k) => k.approved !== false)
+      .filter((k) => k.approved === true)
       .map((k) => `Q: ${k.question}\nA: ${k.answer}`)
       .join("\n\n");
 
@@ -3332,12 +3332,17 @@ ${industryContext || "Standard business inquiry catalog."}
       message,
       {
         businessName: workspace.name,
+        industry: workspace.industry,
         businessDescription: workspace.businessDescription,
         workingHours: workspace.aiSettings?.workingHours,
         clinicServices: workspace.clinicServices,
         doctors: workspace.doctors,
         coupons: workspace.coupons,
         knowledgeBase: workspace.knowledgeBase,
+        menu: workspace.menu,
+        medicines: workspace.medicines,
+        products: workspace.products,
+        courses: workspace.courses,
       },
     );
 

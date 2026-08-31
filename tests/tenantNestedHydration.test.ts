@@ -138,3 +138,24 @@ test("appointment form awaits authoritative persistence before clearing", () => 
   assert.match(appointmentTableSource, /const success = await addAppointment/);
   assert.match(appointmentTableSource, /if \(!success\) return/);
 });
+
+test("workspace switching synchronously enters CRM and appointment loading states", () => {
+  const start = appContextSource.indexOf("const setCurrentWorkspaceId =");
+  const end = appContextSource.indexOf("useEffect(() =>", start);
+  const transition = appContextSource.slice(start, end);
+  const selectIndex = transition.indexOf("setCurrentWorkspaceIdState(id)");
+
+  assert.ok(transition.indexOf("setCrmLeadsLoading(true)") >= 0);
+  assert.ok(transition.indexOf("setAppointmentsLoading(true)") >= 0);
+  assert.ok(transition.indexOf("setCrmLeads([])") < selectIndex);
+  assert.ok(transition.indexOf("setAppointments([])") < selectIndex);
+  assert.ok(transition.indexOf("setCrmLeadsLoading(true)") < selectIndex);
+  assert.ok(transition.indexOf("setAppointmentsLoading(true)") < selectIndex);
+});
+
+test("reselecting the current workspace preserves live hydration instead of clearing it", () => {
+  const start = appContextSource.indexOf("const setCurrentWorkspaceId = (id: string)");
+  const end = appContextSource.indexOf("useEffect(() =>", start);
+  const setter = appContextSource.slice(start, end);
+  assert.match(setter, /if \(id === currentWorkspaceId\) return;/);
+});

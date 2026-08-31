@@ -18,6 +18,7 @@ CONFIG_JSON="$(mktemp)"
 PUBLIC_ENV="$(mktemp)"
 SAFE_SMOKE="$(mktemp --suffix=.mjs)"
 TELEGRAM_CHECK="$(mktemp --suffix=.mjs)"
+RESTART_LOG="$(mktemp)"
 # /tmp is writable by the non-root runtime user. Do not use /app here:
 # previous handoffs failed closed with EACCES when creating verifier files.
 HANDOFF_DIR="/tmp/fox-staging-handoff-${STAMP}"
@@ -32,6 +33,7 @@ cleanup() {
     "$PUBLIC_ENV" \
     "$SAFE_SMOKE" \
     "$TELEGRAM_CHECK" \
+    "$RESTART_LOG" \
     2>/dev/null || true
 
   docker exec "$CONTAINER" rm -rf "$HANDOFF_DIR" \
@@ -39,44 +41,23 @@ cleanup() {
 }
 
 show_relevant_errors() {
-  printf '\n=== RELEVANT FOX STAGING ERRORS ===\n'
+  printf '\n=== SAFE FOX STAGING ERROR SUMMARY ===\n'
 
   docker logs --since "$STARTED_AT" "$CONTAINER" 2>&1 | python3 -c '
 import re, sys
 
 lines = sys.stdin.read().splitlines()
-selected = [
-    line for line in lines
-    if re.search(
-        r"(error|failed|failure|fatal|exception|unhandled|uncaught|unhealthy|denied|invalid)",
-        line,
-        re.I,
-    )
-]
-
-for line in selected[-120:]:
-    line = re.sub(
-        r"(?i)(authorization|bearer|token|api[_ -]?key|secret|password|private[_ -]?key)(\s*[:=]\s*)(\S+)",
-        r"\1\2<redacted>",
-        line,
-    )
-    line = re.sub(
-        r"(?i)(access_token=)[^&\s]+",
-        r"\1<redacted>",
-        line,
-    )
-    line = re.sub(
-        r"AIza[0-9A-Za-z_-]{20,}",
-        "<redacted-public-key>",
-        line,
-    )
-    print(line[:1200])
-
-if not selected:
-    print("No matching error lines found in the current restart window.")
+patterns = {
+    "error_marker_lines": r"error|failed|failure|fatal|exception|unhandled|uncaught|unhealthy|denied|invalid",
+    "startup_marker_lines": r"startup|ready|health|firebase admin|telegram runtime",
+}
+for label, pattern in patterns.items():
+    count = sum(bool(re.search(pattern, line, re.I)) for line in lines)
+    print(f"{label}={count}")
+print("raw_log_content=suppressed")
 ' || true
 
-  printf '=== END RELEVANT ERRORS ===\n'
+  printf '=== END SAFE ERROR SUMMARY ===\n'
 }
 
 on_error() {
@@ -324,7 +305,8 @@ if values.get("FIRESTORE_DATABASE_ID", ""):
 
 dockerfile = (source / "Dockerfile").read_text(encoding="utf-8")
 
-if not re.search(r"FROM\s+node:24(?:[-\s]|$)", dockerfile):
+node_stages = re.findall(r"^FROM\s+node:([^\s]+)", dockerfile, re.M)
+if not node_stages or any(not stage.startswith("24-") and stage != "24" for stage in node_stages):
     raise SystemExit(
         "Dockerfile is not pinned to Node 24"
     )
@@ -347,6 +329,11 @@ git -C "$SOURCE" diff --name-only
 
 printf '\nUntracked files:\n'
 git -C "$SOURCE" ls-files --others --exclude-standard
+
+if [ -n "$(git -C "$SOURCE" status --porcelain)" ]; then
+  printf 'Refusing deployment: staging source tree is not clean.\n' >&2
+  exit 1
+fi
 
 printf '\n=== 3. IDENTIFY THE EXISTING STAGING COMPOSE SERVICE ===\n'
 
@@ -483,6 +470,8 @@ chmod 700 "$BACKUP_ROOT" "$BACKUP_DIR"
 
 tar \
   --exclude='.git' \
+  --exclude='.env' \
+  --exclude='.env.*' \
   --exclude='node_modules' \
   --exclude='dist' \
   --exclude='.cache' \
@@ -598,6 +587,7 @@ printf '\n=== 7. RECREATE ONLY THE FOX STAGING SERVICE ===\n'
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Set before Compose changes anything so a partial recreate also rolls back.
 DEPLOY_RECREATED=1
 docker compose \
   -f "$COMPOSE" \
@@ -631,6 +621,14 @@ test "$healthy" -eq 1
 docker inspect \
   --format 'container={{.Name}} status={{.State.Status}} health={{.State.Health.Status}} image={{.Config.Image}}' \
   "$CONTAINER"
+
+RUNTIME_NODE_VERSION="$(
+  docker exec "$CONTAINER" node -p 'process.versions.node'
+)"
+case "$RUNTIME_NODE_VERSION" in
+  24.*) printf 'Runtime Node version: %s (PASS)\n' "$RUNTIME_NODE_VERSION" ;;
+  *) printf 'Refusing runtime Node version: %s\n' "$RUNTIME_NODE_VERSION" >&2; exit 1 ;;
+esac
 
 printf '\n=== 9. VERIFY PUBLIC HEALTH AND READINESS ===\n'
 
@@ -786,12 +784,12 @@ PY
 printf '\n=== 11. VERIFY STARTUP AND TELEGRAM RUNTIME LOGS ===\n'
 
 docker logs --since "$STARTED_AT" "$CONTAINER" 2>&1 \
-  >"${BACKUP_DIR}/restart.log"
+  >"$RESTART_LOG"
 
-chmod 600 "${BACKUP_DIR}/restart.log"
+chmod 600 "$RESTART_LOG"
 
 python3 - \
-  "${BACKUP_DIR}/restart.log" \
+  "$RESTART_LOG" \
   "$WORKSPACE_ID" \
   "$BASE_URL" <<'PY'
 import pathlib
@@ -1107,6 +1105,7 @@ docker exec -u 0 "$CONTAINER" chown -R 1001:1001 "$HANDOFF_DIR"
 printf '\n=== 15. VERIFY TELEGRAM DIRECTLY THROUGH getWebhookInfo ===\n'
 
 docker exec \
+  -e NODE_PATH=/app/node_modules \
   -e FOX_TELEGRAM_WORKSPACE_ID="$WORKSPACE_ID" \
   -e FOX_EXPECTED_TELEGRAM_WEBHOOK="$EXPECTED_TELEGRAM_WEBHOOK" \
   "$CONTAINER" \
@@ -1116,6 +1115,7 @@ docker exec \
 printf '\n=== 16. RUN STAGING SMOKE AND DATA AUDIT ===\n'
 
 docker exec \
+  -e NODE_PATH=/app/node_modules \
   -e FOX_SMOKE_BASE_URL="$BASE_URL" \
   -e FOX_SMOKE_WORKSPACE_ID="$WORKSPACE_ID" \
   "$CONTAINER" \
@@ -1123,6 +1123,7 @@ docker exec \
   "${HANDOFF_DIR}/scripts/staging-smoke.mjs"
 
 docker exec \
+  -e NODE_PATH=/app/node_modules \
   -e FOX_SMOKE_WORKSPACE_ID="$WORKSPACE_ID" \
   "$CONTAINER" \
   node \
@@ -1138,7 +1139,8 @@ docker ps \
 
 printf 'Public URL: %s\n' "$BASE_URL"
 printf 'Backup: %s\n' "$BACKUP_DIR"
-printf 'Deployment result: PASS\n'
+printf 'Automated deployment checks: PASS\n'
+printf 'Manual browser and Telegram acceptance checks: PENDING\n'
 
 printf '\n=== REQUIRED SUPER ADMIN / CRM / CALENDAR BROWSER CHECK ===\n'
 printf '%s\n' \

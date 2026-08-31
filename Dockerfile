@@ -39,8 +39,8 @@ ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY \
     VITE_FIREBASE_MESSAGING_SENDER_ID=$VITE_FIREBASE_MESSAGING_SENDER_ID \
     VITE_FIREBASE_APP_ID=$VITE_FIREBASE_APP_ID
 
-# Build the application (client + server bundles)
-RUN npm run build
+# Verify and build the application (client + server bundles)
+RUN npm run lint && npm test && npm run build
 
 # ---- Stage 2: Runtime ----
 FROM node:24-alpine AS runtime

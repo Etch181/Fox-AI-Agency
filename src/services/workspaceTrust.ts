@@ -38,6 +38,7 @@ const SAFE_WORKSPACE_FIELDS = [
   "onboardingCompletedAt",
   "onboardingStep",
   "businessDescription",
+  "metaPageId",
   "onboardingAiReady",
   "onboardingCatalogReady",
   "crmSpreadsheetId",

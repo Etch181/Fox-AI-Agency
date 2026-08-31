@@ -31,14 +31,26 @@ export interface TenantKnowledgeFact {
   approved?: boolean;
 }
 
+export interface TenantCatalogItem {
+  name?: string;
+  price?: number;
+  description?: string;
+  available?: boolean;
+}
+
 export interface TenantBusinessInquiryContext {
   businessName?: string;
+  industry?: string;
   businessDescription?: string;
   workingHours?: string;
   clinicServices?: TenantClinicService[];
   doctors?: TenantDoctor[];
   coupons?: TenantCoupon[];
   knowledgeBase?: TenantKnowledgeFact[];
+  menu?: TenantCatalogItem[];
+  medicines?: TenantCatalogItem[];
+  products?: TenantCatalogItem[];
+  courses?: TenantCatalogItem[];
 }
 
 export interface TenantBusinessInquiryAnswer {
@@ -73,13 +85,30 @@ function pricedDoctors(context: TenantBusinessInquiryContext) {
   );
 }
 
+function availableIndustryCatalog(context: TenantBusinessInquiryContext) {
+  const industry = clean(context.industry).toLowerCase();
+  const catalog = industry === "restaurant"
+    ? context.menu
+    : industry === "pharmacy"
+      ? context.medicines
+      : industry === "retail"
+        ? context.products
+        : industry === "course center"
+          ? context.courses
+          : [];
+
+  return (catalog || []).filter(
+    (item) => item.available !== false && clean(item.name),
+  );
+}
+
 function eligibleCoupons(context: TenantBusinessInquiryContext, now: Date) {
   const today = dateKey(now);
 
   return (context.coupons || []).filter((coupon) => {
     if (
-      coupon.isActive === false ||
-      coupon.aiCanUse === false ||
+      coupon.isActive !== true ||
+      coupon.aiCanUse !== true ||
       !clean(coupon.code)
     ) {
       return false;
@@ -173,7 +202,10 @@ export function answerTenantBusinessInquiry(
         doctor.consultationFeeEGP,
       ),
     );
-    const lines = [...serviceLines, ...doctorLines];
+    const catalogLines = availableIndustryCatalog(context).map((item) =>
+      priceLine(clean(item.name), item.price),
+    );
+    const lines = [...serviceLines, ...doctorLines, ...catalogLines];
 
     return {
       intent: "pricing",
@@ -185,11 +217,16 @@ export function answerTenantBusinessInquiry(
 
   if (/^(الخدمات|خدماتكم|ايه الخدمات|إيه الخدمات|services|what services)[!.،\s؟?]*$/i.test(normalized)) {
     const services = availableServices(context);
-    const lines = services.map((service) => {
+    const serviceLines = services.map((service) => {
       const description = clean(service.description);
       const duration = Number(service.durationMinutes || 0);
       return `• ${clean(service.name)}${Number.isFinite(Number(service.price)) ? ` — ${Number(service.price)} جنيه` : ""}${duration > 0 ? ` — ${duration} دقيقة` : ""}${description ? ` — ${description}` : ""}`;
     });
+    const catalogLines = availableIndustryCatalog(context).map((item) => {
+      const description = clean(item.description);
+      return `• ${clean(item.name)}${Number.isFinite(Number(item.price)) ? ` — ${Number(item.price)} جنيه` : ""}${description ? ` — ${description}` : ""}`;
+    });
+    const lines = [...serviceLines, ...catalogLines];
 
     return {
       intent: "services",
@@ -201,7 +238,7 @@ export function answerTenantBusinessInquiry(
 
   if (/(مميزات|المميزات|ميزة|نبذة|عن العيادة|عنكم|features|about)/i.test(normalized)) {
     const approvedAnswers = (context.knowledgeBase || [])
-      .filter((fact) => fact.approved !== false && clean(fact.answer))
+      .filter((fact) => fact.approved === true && clean(fact.answer))
       .map((fact) => clean(fact.answer));
     const details = [
       clean(context.businessDescription),

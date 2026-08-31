@@ -1335,6 +1335,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    if (id === currentWorkspaceId) return;
+
+    setCrmLeads([]);
+    setCrmLeadsLoading(true);
+    setCrmLeadsError(null);
+    setAppointments([]);
+    setAppointmentsLoading(true);
+    setAppointmentsError(null);
     setCurrentWorkspaceIdState(id);
     localStorage.setItem("fox_current_workspace", id);
   };

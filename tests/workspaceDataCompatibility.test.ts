@@ -44,3 +44,13 @@ test("appointment creation atomically rechecks and claims the tenant slot", () =
   assert.match(createAppointment, /FOX_APPOINTMENT_SLOT_UNAVAILABLE/);
   assert.match(createAppointment, /transaction\.set\(appointmentRef/);
 });
+
+test("root CRM compatibility mirror never overwrites another workspace", () => {
+  const start = source.indexOf("async function syncRootCrmLeadCompatibility");
+  const end = source.indexOf("const updateDoc", start);
+  const helper = source.slice(start, end);
+  assert.match(helper, /adminDb\.runTransaction/);
+  assert.match(helper, /existingWorkspaceId/);
+  assert.match(helper, /existing\.exists\s*&&\s*existingWorkspaceId !== incomingWorkspaceId/);
+  assert.match(helper, /transaction\.set/);
+});

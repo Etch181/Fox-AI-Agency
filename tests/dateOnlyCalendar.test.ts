@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   formatDateKeyInTimeZone,
   formatLocalDateKey,
+  isBusinessDateTimeInPast,
   isValidDateOnlyKey,
 } from "../src/utils/dateOnly.ts";
 
@@ -43,6 +44,26 @@ test("server business-day comparisons use the configured Cairo calendar day", ()
   assert.equal(
     formatDateKeyInTimeZone(boundary, "America/Los_Angeles"),
     "2026-08-29",
+  );
+});
+
+test("same-day past appointment times fail closed in the Cairo business timezone", () => {
+  const now = new Date("2026-08-30T14:00:00.000Z");
+  assert.equal(
+    isBusinessDateTimeInPast("2026-08-30", "04:30 PM", now),
+    true,
+  );
+  assert.equal(
+    isBusinessDateTimeInPast("2026-08-30", "05:30 PM", now),
+    false,
+  );
+  assert.equal(
+    isBusinessDateTimeInPast("2026-08-31", "01:00 AM", now),
+    false,
+  );
+  assert.equal(
+    isBusinessDateTimeInPast("invalid", "05:30 PM", now),
+    true,
   );
 });
 

@@ -3,6 +3,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const serverSource = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
+const deploymentSource = readFileSync(
+  new URL("../deploy-staging-handoff.sh", import.meta.url),
+  "utf8",
+);
 
 test("Meta webhook verification fails closed and never returns a challenge without an exact configured token", () => {
   const start = serverSource.indexOf("// Meta Webhook Verification (GET)");
@@ -110,4 +114,35 @@ test("AI session reset is authenticated and restricted to the authoritative work
   const route = serverSource.slice(start, end);
   assert.match(route, /authenticateFirebaseRequest/);
   assert.match(route, /requireAuthenticatedWorkspace/);
+});
+
+test("tenant Telegram webhooks require the derived Telegram secret and honor the feature flag", () => {
+  const configureStart = serverSource.indexOf("async function configureWorkspaceTelegramWebhook");
+  const routeStart = serverSource.indexOf('"/api/telegram/webhook/:workspaceId"');
+  const routeEnd = serverSource.indexOf("// EXPLICIT LEGACY WORKSPACE SECRET MIGRATION", routeStart);
+  const configure = serverSource.slice(configureStart, routeStart);
+  const route = serverSource.slice(routeStart, routeEnd);
+
+  assert.match(configure, /secret_token/);
+  assert.match(configure, /getWorkspaceTelegramWebhookSecret/);
+  assert.match(route, /INTEGRATION_FLAGS\.telegram/);
+  assert.match(route, /x-telegram-bot-api-secret-token/);
+  assert.match(serverSource, /function isValidWorkspaceTelegramWebhookSecret[\s\S]*?timingSafeEqual/);
+});
+
+test("tenant Telegram token management honors the global integration kill switch", () => {
+  const start = serverSource.indexOf('"/api/telegram/workspace/:workspaceId/token"');
+  const route = serverSource.slice(start, start + 7000);
+  assert.match(route, /INTEGRATION_FLAGS\.telegram/);
+});
+
+test("staging handoff excludes env secrets, requires a clean tree, and verifies Node 24 without printing raw logs", () => {
+  assert.match(deploymentSource, /--exclude='\.env'/);
+  assert.match(deploymentSource, /--exclude='\.env\.\*'/);
+  assert.match(deploymentSource, /status --porcelain/);
+  assert.match(deploymentSource, /process\.versions\.node/);
+  assert.match(deploymentSource, /error_marker_lines/);
+  assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);
+  assert.match(deploymentSource, /Automated deployment checks: PASS/);
+  assert.doesNotMatch(deploymentSource, /Deployment result: PASS/);
 });

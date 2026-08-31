@@ -1,5 +1,8 @@
 import { adminDb } from "./firebaseAdmin";
-import { formatDateKeyInTimeZone } from "../utils/dateOnly";
+import {
+  formatDateKeyInTimeZone,
+  isBusinessDateTimeInPast,
+} from "../utils/dateOnly";
 
 function sanitizeForFirestore<T>(value: T): T {
   if (value === undefined || value === null) {
@@ -114,11 +117,36 @@ async function syncRootCrmLeadCompatibility(
   lead: Record<string, any>
 ) {
   try {
-    await setDoc(
-      doc("crmLeads", leadId),
-      sanitizeForFirestore(lead),
-      { merge: true }
-    );
+    const incomingWorkspaceId = String(lead.workspaceId || "").trim();
+    if (!incomingWorkspaceId) return;
+
+    const rootRef = adminDb.collection("crmLeads").doc(leadId);
+    const mirrored = await adminDb.runTransaction(async (transaction) => {
+      const existing = await transaction.get(rootRef);
+      const existingWorkspaceId = String(
+        existing.data()?.workspaceId || ""
+      ).trim();
+
+      if (
+        existing.exists &&
+        existingWorkspaceId !== incomingWorkspaceId
+      ) {
+        return false;
+      }
+
+      transaction.set(
+        rootRef,
+        sanitizeForFirestore(lead),
+        { merge: true }
+      );
+      return true;
+    });
+
+    if (!mirrored) {
+      console.warn(
+        `[FOX CRM] Root compatibility collision skipped for lead ${leadId}`
+      );
+    }
   } catch (error) {
     console.warn(
       `[FOX CRM] Root compatibility sync failed for lead ${leadId}:`,
@@ -202,7 +230,8 @@ export const workspaceDataService = {
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(data.date) ||
-      data.date < todayISO
+      data.date < todayISO ||
+      isBusinessDateTimeInPast(data.date, data.time)
     ) {
       throw new Error(
         `Cannot create appointment in the past. Requested=${data.date}, Today=${todayISO}`
@@ -334,6 +363,50 @@ export const workspaceDataService = {
     })) as any[];
   },
 
+  async getMenuItems(workspaceId: string) {
+    const snapshot = await getDocs(query(
+      collection("menuItems"),
+      where("workspaceId", "==", workspaceId)
+    ));
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
+  async getMedicines(workspaceId: string) {
+    const snapshot = await getDocs(query(
+      collection("medicines"),
+      where("workspaceId", "==", workspaceId)
+    ));
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
+  async getProducts(workspaceId: string) {
+    const snapshot = await getDocs(query(
+      collection("products"),
+      where("workspaceId", "==", workspaceId)
+    ));
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
+  async getCourses(workspaceId: string) {
+    const snapshot = await getDocs(query(
+      collection("courses"),
+      where("workspaceId", "==", workspaceId)
+    ));
+    return snapshot.docs.map((snapshotDoc) => ({
+      id: snapshotDoc.id,
+      ...snapshotDoc.data(),
+    })) as any[];
+  },
+
   async getDoctors(
     workspaceId: string
   ) {
@@ -398,7 +471,8 @@ export const workspaceDataService = {
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-      date < todayISO
+      date < todayISO ||
+      isBusinessDateTimeInPast(date, time)
     ) {
       return false;
     }

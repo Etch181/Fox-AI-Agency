@@ -11,6 +11,10 @@ const aiAgentSource = readFileSync(
   new URL("../src/services/aiAgentService.ts", import.meta.url),
   "utf8",
 );
+const couponServiceSource = readFileSync(
+  new URL("../src/services/couponService.ts", import.meta.url),
+  "utf8",
+);
 const serverSource = readFileSync(
   new URL("../server.ts", import.meta.url),
   "utf8",
@@ -99,6 +103,37 @@ test("post-booking services list only configured available clinic services", () 
   assert.doesNotMatch(result.response, /خدمة متوقفة/);
 });
 
+test("non-clinic pricing and services use the selected tenant industry catalog", () => {
+  const restaurant = answerTenantBusinessInquiry(
+    "الأسعار والخدمات",
+    {
+      businessName: "مطعم",
+      industry: "Restaurant",
+      menu: [
+        { name: "وجبة مشويات", price: 220, available: true },
+        { name: "وجبة متوقفة", price: 999, available: false },
+      ],
+    },
+    now,
+  );
+  assert.ok(restaurant);
+  assert.match(restaurant.response, /وجبة مشويات/);
+  assert.match(restaurant.response, /220/);
+  assert.doesNotMatch(restaurant.response, /وجبة متوقفة/);
+
+  const retail = answerTenantBusinessInquiry(
+    "الخدمات",
+    {
+      industry: "Retail",
+      products: [{ name: "منتج متاح", price: 75, available: true }],
+    },
+    now,
+  );
+  assert.ok(retail);
+  assert.match(retail.response, /منتج متاح/);
+  assert.match(retail.response, /75/);
+});
+
 test("post-booking offers use only active AI-visible tenant coupons", () => {
   const result = answerTenantBusinessInquiry("عندكم عروض؟", tenant, now);
   assert.ok(result);
@@ -116,6 +151,21 @@ test("offers inquiry honestly reports none when no configured coupon is eligible
   );
   assert.ok(result);
   assert.match(result.response, /لا توجد عروض متاحة حالياً/);
+
+  const legacyWithoutApproval = answerTenantBusinessInquiry(
+    "عندكم عروض؟",
+    {
+      ...tenant,
+      coupons: [{
+        code: "DRAFT",
+        discountType: "percentage",
+        discountValue: 50,
+      }],
+    },
+    now,
+  );
+  assert.ok(legacyWithoutApproval);
+  assert.doesNotMatch(legacyWithoutApproval.response, /DRAFT/);
 });
 
 test("working hours and approved business facts answer fresh intents after booking", () => {
@@ -128,6 +178,19 @@ test("working hours and approved business facts answer fresh intents after booki
   assert.ok(features);
   assert.equal(features.intent, "business_info");
   assert.match(features.response, /متابعة دقيقة وخدمة سريعة/);
+
+  const unapproved = answerTenantBusinessInquiry(
+    "ايه المميزات",
+    {
+      knowledgeBase: [{
+        question: "draft",
+        answer: "لا يجب عرضه",
+      }],
+    },
+    now,
+  );
+  assert.ok(unapproved);
+  assert.doesNotMatch(unapproved.response, /لا يجب عرضه/);
 });
 
 test("thanks receives a natural reply while a fresh booking intent remains for the booking state machine", () => {
@@ -148,11 +211,27 @@ test("thanks receives a natural reply while a fresh booking intent remains for t
   assert.match(aiAgentSource, /book\\s\+new\\s\+appointment/);
 });
 
+test("general agent context exposes only explicitly approved knowledge", () => {
+  assert.match(
+    aiAgentSource,
+    /\.filter\(\(k\) => k\.approved === true\)/,
+  );
+});
+
+test("AI coupon validation and redemption require explicit activation and AI approval", () => {
+  assert.match(couponServiceSource, /coupon\.isActive !== true \|\| coupon\.aiCanUse !== true/);
+  assert.match(couponServiceSource, /fresh\.isActive !== true \|\| fresh\.aiCanUse !== true/);
+});
+
 test("runtime hydration loads tenant-scoped business catalogs and booking completion is terminal", () => {
   assert.match(serverSource, /getClinicServices\(workspaceId\)/);
   assert.match(serverSource, /getDoctors\(workspaceId\)/);
   assert.match(serverSource, /getKnowledgeFacts\(workspaceId\)/);
   assert.match(serverSource, /getCoupons\(workspaceId\)/);
+  assert.match(serverSource, /getMenuItems\(workspaceId\)/);
+  assert.match(serverSource, /getMedicines\(workspaceId\)/);
+  assert.match(serverSource, /getProducts\(workspaceId\)/);
+  assert.match(serverSource, /getCourses\(workspaceId\)/);
   assert.match(aiAgentSource, /answerTenantBusinessInquiry/);
   assert.match(aiAgentSource, /BOOKING_STATE:COMPLETED/);
   assert.doesNotMatch(

@@ -84,7 +84,7 @@ export const couponService = {
       };
     }
 
-    if (coupon.isActive === false) {
+    if (coupon.isActive !== true || coupon.aiCanUse !== true) {
       return {
         valid: false,
         reason: "COUPON_INACTIVE",
@@ -259,7 +259,7 @@ export const couponService = {
           throw new Error("COUPON_WORKSPACE_MISMATCH");
         }
 
-        if (fresh.isActive === false) {
+        if (fresh.isActive !== true || fresh.aiCanUse !== true) {
           throw new Error("COUPON_INACTIVE");
         }
 
