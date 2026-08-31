@@ -4,8 +4,10 @@ umask 077
 
 # FOX staging only — do not change these paths.
 SOURCE="/docker/hermes-agent-6pb0/data/fox-ai-agency"
+EXPECTED_SOURCE_REALPATH="/docker/hermes-agent-6pb0/data/fox-ai-agency"
 COMPOSE="/docker/fox-ai-staging/docker-compose.yml"
 ENV_FILE="${SOURCE}/.env.staging"
+RELEASE_MANIFEST="/docker/fox-ai-staging/release-manifest.env"
 CONTAINER="fox-ai-staging"
 BASE_URL="https://staging.foxaiagency.online"
 WORKSPACE_ID="ws_tg_924598"
@@ -38,6 +40,13 @@ cleanup() {
 
   docker exec "$CONTAINER" rm -rf "$HANDOFF_DIR" \
     >/dev/null 2>&1 || true
+}
+
+verify_release_identity() {
+  python3 "${SOURCE}/scripts/verify_staging_preflight.py" \
+    --source "$SOURCE" \
+    --expected-source-realpath "$EXPECTED_SOURCE_REALPATH" \
+    --manifest "$RELEASE_MANIFEST"
 }
 
 show_relevant_errors() {
@@ -130,7 +139,12 @@ test -f "${SOURCE}/tests/workspaceDataCompatibility.test.ts"
 test -f "${SOURCE}/scripts/build-staging.mjs"
 test -f "${SOURCE}/scripts/staging-smoke.mjs"
 test -f "${SOURCE}/scripts/staging-data-audit.mjs"
+test -f "${SOURCE}/scripts/verify_staging_preflight.py"
 test -f "${SOURCE}/deploy/n8n-staging/docker-compose.yml"
+
+printf '\n=== 2. FAIL-CLOSED RELEASE / SOURCE / AUTHORIZATION PREFLIGHT ===\n'
+
+verify_release_identity
 
 python3 - "$SOURCE" "$ENV_FILE" <<'PY'
 import pathlib
@@ -178,12 +192,7 @@ required_source_checks = {
         "appointmentsLoading",
         "compatibility-only",
     ],
-    "src/App.tsx": [
-        "resolveAuthorizedView",
-        "const activeTab: ViewTab",
-        "setRequestedView(authorized)",
-        "Loading authorized workspaces",
-    ],
+
     "src/utils/workspaceHydration.ts": [
         "resolveAuthorizedWorkspaceSelection",
         "userWorkspaceId",
@@ -318,7 +327,7 @@ print("Node 24 Docker build requirement: PASS")
 print("n8n workflow count: 10")
 PY
 
-printf '\n=== 2. CURRENT GIT/SOURCE STATE ===\n'
+printf '\n=== 3. VERIFIED GIT/SOURCE STATE ===\n'
 
 git -C "$SOURCE" status --short --branch
 
@@ -331,12 +340,7 @@ git -C "$SOURCE" diff --name-only
 printf '\nUntracked files:\n'
 git -C "$SOURCE" ls-files --others --exclude-standard
 
-if [ -n "$(git -C "$SOURCE" status --porcelain)" ]; then
-  printf 'Refusing deployment: staging source tree is not clean.\n' >&2
-  exit 1
-fi
-
-printf '\n=== 3. IDENTIFY THE EXISTING STAGING COMPOSE SERVICE ===\n'
+printf '\n=== 4. IDENTIFY THE EXISTING STAGING COMPOSE SERVICE ===\n'
 
 docker inspect "$CONTAINER" >/dev/null
 
@@ -466,6 +470,9 @@ printf 'Pre-deploy rollback image prepared: %s\n' "$ROLLBACK_TAG"
 
 printf '\n=== 4. CREATE SECURE TIMESTAMPED BACKUP OUTSIDE REPOSITORY ===\n'
 
+# Fail closed if mutable source changed after the initial release gate.
+verify_release_identity
+
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_ROOT" "$BACKUP_DIR"
 
@@ -585,6 +592,9 @@ docker compose \
   "$SERVICE"
 
 printf '\n=== 7. RECREATE ONLY THE FOX STAGING SERVICE ===\n'
+
+# Do not recreate if source changed while the image was being built.
+verify_release_identity
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

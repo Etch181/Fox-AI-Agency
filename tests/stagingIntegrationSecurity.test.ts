@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 
 const serverSource = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
@@ -145,8 +156,159 @@ test("staging handoff excludes env secrets, requires a clean tree, and verifies 
   assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);
   assert.match(deploymentSource, /Automated deployment checks: PASS/);
   assert.doesNotMatch(deploymentSource, /Deployment result: PASS/);
-  assert.doesNotMatch(deploymentSource, /activeTab\.startsWith\(\\"admin_\\"\)/);
-  assert.match(deploymentSource, /resolveAuthorizedView/);
-  assert.match(deploymentSource, /const activeTab: ViewTab/);
-  assert.match(deploymentSource, /setRequestedView\(authorized\)/);
+  assert.match(deploymentSource, /verify_staging_preflight\.py/);
+  assert.ok(
+    (deploymentSource.match(/verify_release_identity/g) || []).length >= 4,
+    "release identity must be rechecked before backup and before recreate",
+  );
+  assert.doesNotMatch(
+    deploymentSource,
+    /activeTab\s*\.\s*startsWith\s*\(\s*["']admin_["']\s*\)/,
+  );
+});
+
+const preflightVerifier = new URL(
+  "../scripts/verify_staging_preflight.py",
+  import.meta.url,
+);
+const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const authorizationSource = readFileSync(
+  new URL("../src/security/appAuthorization.ts", import.meta.url),
+  "utf8",
+);
+
+function createPreflightFixture() {
+  const root = mkdtempSync(join(tmpdir(), "fox-staging-preflight-"));
+  const source = join(root, "source");
+  const manifest = join(root, "release-manifest.env");
+  mkdirSync(join(source, "src", "security"), { recursive: true });
+  writeFileSync(join(source, "src", "App.tsx"), appSource);
+  writeFileSync(
+    join(source, "src", "security", "appAuthorization.ts"),
+    authorizationSource,
+  );
+  writeFileSync(join(source, "README.md"), "fixture\n");
+  execFileSync("git", ["init", "--quiet", source]);
+  execFileSync("git", ["-C", source, "config", "user.email", "test@example.invalid"]);
+  execFileSync("git", ["-C", source, "config", "user.name", "Test"]);
+  execFileSync("git", ["-C", source, "add", "."]);
+  execFileSync("git", ["-C", source, "commit", "--quiet", "-m", "fixture"]);
+  return { root, source, manifest };
+}
+
+function runPreflight(
+  source: string,
+  manifest: string,
+  expectedSourceRealpath = source,
+) {
+  return spawnSync(
+    "python3",
+    [
+      preflightVerifier.pathname,
+      "--source",
+      source,
+      "--expected-source-realpath",
+      expectedSourceRealpath,
+      "--manifest",
+      manifest,
+      "--manifest-uid",
+      String(process.getuid?.() ?? 0),
+    ],
+    { encoding: "utf8" },
+  );
+}
+
+function writeManifest(manifest: string, commit: string) {
+  writeFileSync(manifest, `FOX_STAGING_EXPECTED_COMMIT=${commit}\n`);
+  chmodSync(manifest, 0o600);
+}
+
+test("staging preflight fails closed for release-manifest, commit, dirty-tree, and authorization wiring failures", () => {
+  const fixture = createPreflightFixture();
+  try {
+    const head = execFileSync("git", ["-C", fixture.source, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "missing manifest must fail");
+
+    writeManifest(fixture.manifest, "not-a-sha");
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "malformed SHA must fail");
+
+    writeManifest(fixture.manifest, head);
+    const correct = runPreflight(fixture.source, fixture.manifest);
+    assert.equal(correct.status, 0, `clean correct HEAD must pass: ${correct.stderr}`);
+
+    writeManifest(fixture.manifest, "0".repeat(40));
+    const wrongCommit = runPreflight(fixture.source, fixture.manifest);
+    assert.notEqual(wrongCommit.status, 0, "wrong clean HEAD must fail");
+    assert.equal(
+      wrongCommit.stderr,
+      `actual HEAD=${head}\nexpected HEAD=${"0".repeat(40)}\n`,
+      "commit mismatch diagnostics must contain only safe commit SHAs",
+    );
+
+    writeManifest(fixture.manifest, head);
+    writeFileSync(join(fixture.source, "README.md"), "dirty\n");
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "dirty correct HEAD must fail");
+    execFileSync("git", ["-C", fixture.source, "checkout", "--", "README.md"]);
+
+    assert.notEqual(
+      runPreflight(fixture.source, fixture.manifest, join(fixture.root, "wrong-source")).status,
+      0,
+      "unexpected repository real path must fail",
+    );
+
+    const appPath = join(fixture.source, "src", "App.tsx");
+    writeFileSync(appPath, `${readFileSync(appPath, "utf8")}\nactiveTab.startsWith("admin_");\n`);
+    execFileSync("git", ["-C", fixture.source, "add", "src/App.tsx"]);
+    execFileSync("git", ["-C", fixture.source, "commit", "--quiet", "-m", "stale literal"]);
+    writeManifest(fixture.manifest, execFileSync(
+      "git", ["-C", fixture.source, "rev-parse", "HEAD"], { encoding: "utf8" },
+    ).trim());
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "stale double-quoted admin literal must fail");
+
+    writeFileSync(appPath, `${appSource}\nactiveTab.startsWith('admin_');\n`);
+    execFileSync("git", ["-C", fixture.source, "add", "src/App.tsx"]);
+    execFileSync("git", ["-C", fixture.source, "commit", "--quiet", "-m", "single-quoted stale literal"]);
+    writeManifest(fixture.manifest, execFileSync(
+      "git", ["-C", fixture.source, "rev-parse", "HEAD"], { encoding: "utf8" },
+    ).trim());
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "stale single-quoted admin literal must fail");
+
+    writeFileSync(appPath, appSource.replace(
+      "? resolveAuthorizedView(currentUser.role, requestedView)",
+      "? (requestedView as ViewTab)",
+    ));
+    execFileSync("git", ["-C", fixture.source, "add", "src/App.tsx"]);
+    execFileSync("git", ["-C", fixture.source, "commit", "--quiet", "-m", "broken authorization wiring"]);
+    writeManifest(fixture.manifest, execFileSync(
+      "git", ["-C", fixture.source, "rev-parse", "HEAD"], { encoding: "utf8" },
+    ).trim());
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "broken active-tab authorization wiring must fail");
+
+    writeFileSync(appPath, appSource.replace(
+      "const authorized = resolveAuthorizedView(\n        currentUser.role,\n        requested,\n      );",
+      "const authorized = requested as ViewTab;",
+    ));
+    execFileSync("git", ["-C", fixture.source, "add", "src/App.tsx"]);
+    execFileSync("git", ["-C", fixture.source, "commit", "--quiet", "-m", "broken direct navigation wiring"]);
+    writeManifest(fixture.manifest, execFileSync(
+      "git", ["-C", fixture.source, "rev-parse", "HEAD"], { encoding: "utf8" },
+    ).trim());
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "broken direct-navigation authorization wiring must fail");
+
+    writeFileSync(appPath, appSource.replace(
+      "const authorized = resolveAuthorizedView(\n      currentUser.role,\n      requestedView,\n    );",
+      "const authorized = requestedView as ViewTab;",
+    ));
+    execFileSync("git", ["-C", fixture.source, "add", "src/App.tsx"]);
+    execFileSync("git", ["-C", fixture.source, "commit", "--quiet", "-m", "broken restored navigation wiring"]);
+    writeManifest(fixture.manifest, execFileSync(
+      "git", ["-C", fixture.source, "rev-parse", "HEAD"], { encoding: "utf8" },
+    ).trim());
+    assert.notEqual(runPreflight(fixture.source, fixture.manifest).status, 0, "broken restored-navigation authorization wiring must fail");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
 });
