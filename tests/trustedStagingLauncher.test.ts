@@ -12,10 +12,13 @@ function source(path: string) {
   return readFileSync(path, "utf8");
 }
 
-test("external trusted launcher is snapshot-only and staging-pinned", () => {
+test("external trusted launcher acquires only the pinned remote tree and snapshots staging inputs", () => {
   const launcher = source(launcherPath);
 
-  assert.match(launcher, /readonly SOURCE='\/docker\/hermes-agent-6pb0\/data\/fox-ai-agency'/);
+  assert.match(launcher, /readonly REMOTE='https:\/\/github\.com\/Etch181\/Fox-AI-Agency\.git'/);
+  assert.match(launcher, /readonly APPROVED_REF='safety\/pre-vps-audit-2026-08-26'/);
+  assert.match(launcher, /readonly APPROVED_COMMIT='acd2a67ed42ce41edd893680df25c83889adaeae'/);
+  assert.match(launcher, /readonly ENV_SOURCE='\/docker\/fox-ai-staging\/\.env\.staging'/);
   assert.match(launcher, /readonly RELEASES='\/docker\/fox-ai-staging\/releases'/);
   assert.match(launcher, /FOX_STAGING_EXPECTED_COMMIT/);
   assert.match(launcher, /FOX_STAGING_HANDOFF_SHA256/);
@@ -24,12 +27,24 @@ test("external trusted launcher is snapshot-only and staging-pinned", () => {
   assert.match(launcher, /FOX_STAGING_ENV_SHA256/);
   assert.match(launcher, /FOX_STAGING_CREDENTIAL_SHA256/);
   assert.match(launcher, /CREDENTIAL_SOURCE='\/docker\/fox-ai-staging\/secrets\/firebase-admin\.json'/);
-  assert.match(launcher, /require_trusted_external_chain/);
-  assert.match(launcher, /require_mutable_source_chain/);
+  assert.match(launcher, /acquire_remote_source/);
+  assert.match(launcher, /validate_remote_tree/);
+  assert.match(launcher, /archive --format=tar/);
+  assert.match(launcher, /refs\/heads\/\$\{?APPROVED_REF\}?/);
+  assert.match(launcher, /env -i PATH="\$PATH" HOME=\/root/);
+  assert.match(launcher, /GIT_CONFIG_NOSYSTEM=1/);
+  assert.match(launcher, /GIT_CONFIG_GLOBAL=\/dev\/null/);
+  assert.match(launcher, /GIT_ALTERNATE_OBJECT_DIRECTORIES=/);
+  assert.match(launcher, /core\.hooksPath=\/dev\/null/);
+  assert.match(launcher, /\/usr\/bin\/git/);
+  assert.match(launcher, /mode 120000 refused/);
+  assert.match(launcher, /mode 160000 refused/);
+  assert.match(launcher, /unexpected remote tree entry/);
   assert.match(launcher, /generate_snapshot_compose/);
   assert.match(launcher, /credentials\/firebase-admin\.json/);
   assert.match(launcher, /unknown manifest key/);
   assert.match(launcher, /duplicate manifest key/);
+  assert.doesNotMatch(launcher, /\/docker\/hermes-agent-6pb0\/data\/fox-ai-agency/);
   assert.doesNotMatch(launcher, /\bsource\s+.*manifest/i);
   assert.doesNotMatch(launcher, /\beval\b/);
   assert.match(launcher, /copy_release_snapshot/);

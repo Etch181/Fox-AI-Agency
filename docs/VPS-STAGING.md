@@ -33,29 +33,20 @@ listening on `127.0.0.1:3000`.
 - See `package.json` `engines` for Node/npm constraints
 - Install via: `nvm install $(cat .nvmrc) && nvm use`
 
-## Docker Usage
+## Staging Deployment Path
 
-### Build the image locally
+**Direct deployment from a mutable checkout is prohibited.** Do not run
+`docker build`, `docker compose up`, `docker compose down`, or manual recreate
+commands from this repository or any Hermes working tree.
 
-```bash
-docker build -t fox-ai-agency:staging .
-```
+The only supported staging deployment path is the separately reviewed,
+root-owned trusted remote-release launcher on the VPS. It acquires the exact
+approved commit from the authorized remote, creates an immutable release area,
+and runs Compose only from that protected release snapshot.
 
-### Run with Docker Compose (recommended for staging)
-
-```bash
-# 1. Copy env template
-cp .env.staging.example .env.staging
-
-# 2. Fill in staging values (never use production credentials)
-nano .env.staging
-
-# 3. Start
-docker compose -f docker-compose.staging.yml up -d
-```
-
-The compose file binds the app to `127.0.0.1:4000` on the host.
-Configure Nginx to proxy to this address.
+Production is a separate procedure and must never use the staging launcher or
+its files. Any emergency/manual bypass requires a separately reviewed
+break-glass procedure; this document intentionally contains no unsafe shortcut.
 
 ## Environment Preparation
 
@@ -103,33 +94,18 @@ curl http://localhost:3000/api/ready
 
 ## Log Inspection
 
-```bash
-# Docker Compose
-docker compose -f docker-compose.staging.yml logs -f
-
-# Or via journalctl if running as system service
-journalctl -u fox-ai-agency -f
-```
+Use only the approved trusted-launcher release identifier and the exact
+root-owned release-local Compose file for read-only logs. Do not run Compose
+from a mutable checkout.
 
 Logs are sanitized — secret values are never logged. Only variable names
 appear in startup validation output.
 
-## Shutdown
+## Shutdown and Rollback
 
-```bash
-# Docker Compose
-docker compose -f docker-compose.staging.yml down
-
-# Graceful shutdown — app handles SIGTERM and closes server cleanly
-docker stop fox-ai-agency-staging
-```
-
-## Rollback
-
-1. Identify the previous working image: `docker images fox-ai-agency`
-2. Revert the compose file to the previous version
-3. Restore the previous `.env.staging` if needed
-4. `docker compose -f docker-compose.staging.yml up -d`
+Staging rollback is performed only by the reviewed launcher using its
+staging-only rollback image path. Manual `docker compose down`, direct image
+retagging, and mutable-worktree Compose commands are prohibited.
 
 ## Production Promotion Checklist
 

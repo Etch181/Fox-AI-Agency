@@ -7,13 +7,15 @@ PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 export PATH
 umask 077
 
-readonly SOURCE='/docker/hermes-agent-6pb0/data/fox-ai-agency'
-readonly SOURCE_REALPATH='/docker/hermes-agent-6pb0/data/fox-ai-agency'
 readonly ROOT='/docker/fox-ai-staging'
 readonly RELEASES='/docker/fox-ai-staging/releases'
 readonly MANIFEST='/docker/fox-ai-staging/release-manifest.env'
 readonly EXTERNAL_COMPOSE='/docker/fox-ai-staging/docker-compose.yml'
+readonly ENV_SOURCE='/docker/fox-ai-staging/.env.staging'
 readonly CREDENTIAL_SOURCE='/docker/fox-ai-staging/secrets/firebase-admin.json'
+readonly REMOTE='https://github.com/Etch181/Fox-AI-Agency.git'
+readonly APPROVED_REF='safety/pre-vps-audit-2026-08-26'
+readonly APPROVED_COMMIT='acd2a67ed42ce41edd893680df25c83889adaeae'
 readonly STAGING_PROJECT='fox-ai-agency-staging'
 readonly STAGING_CONTAINER='fox-ai-staging'
 readonly STAGING_DOMAIN='staging.foxaiagency.online'
@@ -49,13 +51,6 @@ require_trusted_external_chain() {
   done
 }
 
-require_mutable_source_chain() {
-  local p=$1 actual
-  [ ! -L "$p" ] || fail "mutable source symlink refused: $p"
-  actual=$(/usr/bin/realpath -e -- "$p") || fail "mutable source path unavailable: $p"
-  [ "$actual" = "$p" ] || fail "mutable source path traversal refused: $p"
-}
-
 # Strict data-only parser: no shell interpretation, expansion, whitespace, duplicates, or unknown keys.
 load_manifest() {
   local line key value
@@ -79,6 +74,7 @@ load_manifest() {
     esac
   done < "$MANIFEST"
   is_commit "$EXPECTED_COMMIT" || fail 'malformed expected commit'
+  [ "$EXPECTED_COMMIT" = "$APPROVED_COMMIT" ] || fail 'manifest commit is not the approved remote commit'
   is_sha256 "$HANDOFF_SHA" || fail 'malformed handoff hash'
   is_sha256 "$PREFLIGHT_SHA" || fail 'malformed preflight hash'
   is_sha256 "$COMPOSE_SHA" || fail 'malformed compose hash'
@@ -88,8 +84,11 @@ load_manifest() {
 }
 
 safe_git() {
-  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-    /usr/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C "$SOURCE" "$@"
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_ALTERNATE_OBJECT_DIRECTORIES= \
+    /usr/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    -c alias.init= -c alias.ls-remote= -c alias.fetch= -c alias.rev-parse= \
+    -c alias.ls-tree= -c alias.archive= "$@"
 }
 
 tree_hash() {
@@ -117,59 +116,88 @@ require_snapshot_tree() {
   [ -z "$unsafe" ] || fail "snapshot ownership/mode violation: $unsafe"
 }
 
-validate_source() {
-  local actual status
+validate_inputs() {
+  local actual
   [ "$(id -u)" -eq 0 ] || fail 'root required'
   require_trusted_external_chain /docker
   require_trusted_external_chain "$ROOT"
-  require_mutable_source_chain /docker/hermes-agent-6pb0/data
-  require_mutable_source_chain "$SOURCE"
-  [ ! -L "$SOURCE" ] || fail 'source symlink refused'
-  actual=$(/usr/bin/realpath -e -- "$SOURCE") || fail 'source unavailable'
-  [ "$actual" = "$SOURCE_REALPATH" ] || fail 'source realpath mismatch'
-  [ -d "$SOURCE/.git" ] || fail 'source is not a repository'
-  reject_links_or_special_files "$SOURCE"
-  [ "$(safe_git rev-parse HEAD)" = "$EXPECTED_COMMIT" ] || fail 'source HEAD mismatch'
-  status=$(safe_git status --porcelain=v1 --untracked-files=all)
-  [ -z "$status" ] || fail 'source working tree is not clean'
-  [ "$(sha256 "$SOURCE/deploy-staging-handoff.sh")" = "$HANDOFF_SHA" ] || fail 'handoff hash mismatch'
-  [ "$(sha256 "$SOURCE/scripts/verify_staging_preflight.py")" = "$PREFLIGHT_SHA" ] || fail 'preflight hash mismatch'
+  require_root_regular "$EXTERNAL_COMPOSE" 644
   [ "$(sha256 "$EXTERNAL_COMPOSE")" = "$COMPOSE_SHA" ] || fail 'compose hash mismatch'
-  [ "$(sha256 "$SOURCE/.env.staging")" = "$ENV_SHA" ] || fail 'staging env hash mismatch'
+  [ ! -L "$ENV_SOURCE" ] || fail 'staging env symlink refused'
+  [ -f "$ENV_SOURCE" ] || fail 'staging env input missing'
+  actual=$(/usr/bin/realpath -e -- "$ENV_SOURCE") || fail 'staging env unavailable'
+  [ "$actual" = "$ENV_SOURCE" ] || fail 'staging env path traversal refused'
+  [ "$(sha256 "$ENV_SOURCE")" = "$ENV_SHA" ] || fail 'staging env hash mismatch'
   [ ! -L "$CREDENTIAL_SOURCE" ] || fail 'credential symlink refused'
   [ -f "$CREDENTIAL_SOURCE" ] || fail 'credential input missing'
   [ "$(/usr/bin/realpath -e -- "$CREDENTIAL_SOURCE")" = "$CREDENTIAL_SOURCE" ] || fail 'credential path traversal refused'
   [ "$(sha256 "$CREDENTIAL_SOURCE")" = "$CREDENTIAL_SHA" ] || fail 'credential hash mismatch'
 }
 
+validate_remote_tree() {
+  local git_dir=$1 entry metadata path mode type object
+  while IFS= read -r -d '' entry; do
+    metadata=${entry%%$'\t'*}
+    path=${entry#*$'\t'}
+    read -r mode type object <<<"$metadata"
+    case "$mode:$type" in
+      100644:blob|100755:blob) ;;
+      120000:blob) fail "mode 120000 refused: $path" ;;
+      160000:commit) fail "mode 160000 refused: $path" ;;
+      *) fail "unexpected remote tree entry: $mode:$type $path" ;;
+    esac
+    [ "$path" != .git ] && [[ "$path" != .git/* ]] || fail 'remote tree contains .git path'
+  done < <(safe_git -C "$git_dir" ls-tree -r -z "$EXPECTED_COMMIT")
+}
+
+acquire_remote_source() {
+  local tmp=$1 git_dir source_dir advertised
+  git_dir="$tmp/repository.git"
+  source_dir="$tmp/source"
+  safe_git init --bare "$git_dir" >/dev/null
+  advertised=$(safe_git ls-remote --exit-code "$REMOTE" "refs/heads/$APPROVED_REF") || fail 'approved remote ref unavailable'
+  [[ "$advertised" == "$EXPECTED_COMMIT"$'\t'refs/heads/$APPROVED_REF ]] || fail 'approved remote ref does not equal expected commit'
+  safe_git -C "$git_dir" fetch --no-tags "$REMOTE" "refs/heads/$APPROVED_REF:refs/heads/$APPROVED_REF" >/dev/null
+  [ "$(safe_git -C "$git_dir" rev-parse "refs/heads/$APPROVED_REF")" = "$EXPECTED_COMMIT" ] || fail 'fetched remote ref mismatch'
+  validate_remote_tree "$git_dir"
+  /usr/bin/install -d -o root -g root -m 0700 "$source_dir"
+  safe_git -C "$git_dir" archive --format=tar "$EXPECTED_COMMIT" | /bin/tar -x -f - -C "$source_dir"
+  [ ! -e "$source_dir/.git" ] || fail 'materialized source contains .git'
+  reject_links_or_special_files "$source_dir"
+  printf '%s\n' "$EXPECTED_COMMIT" > "$source_dir/.release-identity"
+}
+
 generate_snapshot_compose() {
   local root=$1
   /usr/bin/sed \
-    -e 's#context: /docker/hermes-agent-6pb0/data/fox-ai-agency#context: ./source#' \
-    -e 's#/docker/hermes-agent-6pb0/data/fox-ai-agency/.env.staging#./.env.staging#g' \
+    -e 's#^\([[:space:]]*context:[[:space:]]*\).*#\1./source#' \
+    -e 's#^\([[:space:]]*env_file:[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
+    -e 's#^\([[:space:]]*-[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
     -e 's#/docker/fox-ai-staging/secrets/firebase-admin.json#./credentials/firebase-admin.json#g' \
     "$root/docker-compose.source.yml" > "$root/docker-compose.yml"
   /usr/bin/grep -Fqx '      context: ./source' "$root/docker-compose.yml" || fail 'snapshot compose context rewrite failed'
+  /usr/bin/grep -Fq './.env.staging' "$root/docker-compose.yml" || fail 'snapshot env rewrite failed'
   /usr/bin/grep -Fq './credentials/firebase-admin.json' "$root/docker-compose.yml" || fail 'snapshot credential rewrite failed'
-  ! /usr/bin/grep -Fq "$SOURCE" "$root/docker-compose.yml" || fail 'mutable source path remains in snapshot compose'
+  ! /usr/bin/grep -Fq "$ENV_SOURCE" "$root/docker-compose.yml" || fail 'mutable env path remains in snapshot compose'
   ! /usr/bin/grep -Fq "$CREDENTIAL_SOURCE" "$root/docker-compose.yml" || fail 'mutable credential path remains in snapshot compose'
 }
 
 copy_release_snapshot() {
   local release=$1 tmp
-  require_root_regular "$EXTERNAL_COMPOSE" 644
   tmp="${RELEASES}/.${EXPECTED_COMMIT}.$$.partial"
   [ ! -e "$tmp" ] || fail 'snapshot temporary path exists'
   /usr/bin/install -d -o root -g root -m 0700 "$tmp"
-  # cp preserves bytes without following the source; links were rejected before copy.
-  /bin/cp -a --no-dereference "$SOURCE/." "$tmp/source"
-  printf '%s\n' "$EXPECTED_COMMIT" > "$tmp/source/.release-identity"
+  acquire_remote_source "$tmp"
+  /bin/rm -rf -- "$tmp/repository.git"
+  [ "$(sha256 "$tmp/source/deploy-staging-handoff.sh")" = "$HANDOFF_SHA" ] || fail 'remote handoff hash mismatch'
+  [ "$(sha256 "$tmp/source/scripts/verify_staging_preflight.py")" = "$PREFLIGHT_SHA" ] || fail 'remote preflight hash mismatch'
+  # Runtime inputs are copied only after their immutable hashes were checked.
   /bin/cp -a --no-dereference "$EXTERNAL_COMPOSE" "$tmp/docker-compose.source.yml"
-  /bin/cp -a --no-dereference "$SOURCE/.env.staging" "$tmp/.env.staging"
+  /bin/cp -a --no-dereference "$ENV_SOURCE" "$tmp/.env.staging"
   /usr/bin/install -d -o root -g root -m 0700 "$tmp/credentials"
   /bin/cp -a --no-dereference "$CREDENTIAL_SOURCE" "$tmp/credentials/firebase-admin.json"
   generate_snapshot_compose "$tmp"
-  /bin/rm -rf -- "$tmp/source/.git"
+  [ ! -e "$tmp/source/.git" ] || fail 'release source contains .git'
   /usr/bin/chown -R root:root "$tmp"
   /usr/bin/find "$tmp" -type d -exec /bin/chmod 0700 {} +
   /usr/bin/find "$tmp" -type f -exec /bin/chmod 0600 {} +
@@ -193,7 +221,7 @@ verify_snapshot() {
   /usr/bin/grep -Fqx 'name: fox-ai-agency-staging' "$release/docker-compose.yml" || fail 'compose project mismatch'
   /usr/bin/grep -Fq 'context: ./source' "$release/docker-compose.yml" || fail 'compose build context is not snapshot-local'
   /usr/bin/grep -Fq './credentials/firebase-admin.json' "$release/docker-compose.yml" || fail 'compose credential is not snapshot-local'
-  ! /usr/bin/grep -Fq "$SOURCE" "$release/docker-compose.yml" || fail 'mutable source remains in snapshot compose'
+  ! /usr/bin/grep -Fq "$ENV_SOURCE" "$release/docker-compose.yml" || fail 'mutable env remains in snapshot compose'
   /usr/bin/grep -Fq 'fox-ai-agency-staging' "$release/.env.staging" || fail 'staging project marker absent'
   ! /usr/bin/grep -Eqi 'fox-ai-agency-(prod|production)' "$release/.env.staging" || fail 'production marker found'
 }
@@ -203,8 +231,7 @@ main() {
   load_manifest
   /usr/bin/install -d -o root -g root -m 0700 "$RELEASES"
   exec 9>"$LOCK"; /usr/bin/flock -n 9 || fail 'deployment lock held'
-  validate_source                    # initial validation
-  validate_source                    # validation immediately before copy
+  validate_inputs                    # validate external runtime inputs before acquisition
   local release="${RELEASES}/${EXPECTED_COMMIT}"
   copy_release_snapshot "$release"
   verify_snapshot "$release"         # verify copied immutable bytes
