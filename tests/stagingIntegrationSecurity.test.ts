@@ -150,7 +150,9 @@ test("tenant Telegram token management honors the global integration kill switch
 test("staging handoff excludes env secrets, requires a clean tree, and verifies Node 24 without printing raw logs", () => {
   assert.match(deploymentSource, /--exclude='\.env'/);
   assert.match(deploymentSource, /--exclude='\.env\.\*'/);
-  assert.match(deploymentSource, /status --porcelain/);
+  assert.match(deploymentSource, /FOX_STAGING_RELEASE_SOURCE/);
+  assert.match(deploymentSource, /Verified release HEAD/);
+  assert.doesNotMatch(deploymentSource, /git -C "\$SOURCE"/);
   assert.match(deploymentSource, /process\.versions\.node/);
   assert.match(deploymentSource, /error_marker_lines/);
   assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);

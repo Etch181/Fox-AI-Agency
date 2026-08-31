@@ -2,12 +2,19 @@
 set -Eeuo pipefail
 umask 077
 
-# FOX staging only — do not change these paths.
-SOURCE="/docker/hermes-agent-6pb0/data/fox-ai-agency"
-EXPECTED_SOURCE_REALPATH="/docker/hermes-agent-6pb0/data/fox-ai-agency"
-COMPOSE="/docker/fox-ai-staging/docker-compose.yml"
-ENV_FILE="${SOURCE}/.env.staging"
-RELEASE_MANIFEST="/docker/fox-ai-staging/release-manifest.env"
+# FOX staging only. The external trusted launcher supplies immutable snapshot paths.
+# Refuse direct repository execution: this handoff must run only from a release snapshot.
+: "${FOX_STAGING_RELEASE_ROOT:?trusted release snapshot root is required}"
+: "${FOX_STAGING_RELEASE_SOURCE:?trusted release snapshot source is required}"
+: "${FOX_STAGING_RELEASE_COMPOSE:?trusted release snapshot compose is required}"
+: "${FOX_STAGING_RELEASE_ENV_FILE:?trusted release snapshot env file is required}"
+: "${FOX_STAGING_RELEASE_MANIFEST:?trusted root-owned manifest is required}"
+: "${FOX_STAGING_EXPECTED_COMMIT:?trusted expected commit is required}"
+SOURCE="${FOX_STAGING_RELEASE_SOURCE}"
+EXPECTED_SOURCE_REALPATH="${FOX_STAGING_RELEASE_SOURCE}"
+COMPOSE="${FOX_STAGING_RELEASE_COMPOSE}"
+ENV_FILE="${FOX_STAGING_RELEASE_ENV_FILE}"
+RELEASE_MANIFEST="${FOX_STAGING_RELEASE_MANIFEST}"
 CONTAINER="fox-ai-staging"
 BASE_URL="https://staging.foxaiagency.online"
 WORKSPACE_ID="ws_tg_924598"
@@ -46,7 +53,8 @@ verify_release_identity() {
   python3 "${SOURCE}/scripts/verify_staging_preflight.py" \
     --source "$SOURCE" \
     --expected-source-realpath "$EXPECTED_SOURCE_REALPATH" \
-    --manifest "$RELEASE_MANIFEST"
+    --manifest "$RELEASE_MANIFEST" \
+    --snapshot-commit "$FOX_STAGING_EXPECTED_COMMIT"
 }
 
 show_relevant_errors() {
@@ -327,18 +335,10 @@ print("Node 24 Docker build requirement: PASS")
 print("n8n workflow count: 10")
 PY
 
-printf '\n=== 3. VERIFIED GIT/SOURCE STATE ===\n'
-
-git -C "$SOURCE" status --short --branch
-
-printf 'HEAD='
-git -C "$SOURCE" rev-parse HEAD
-
-printf '\nModified tracked files:\n'
-git -C "$SOURCE" diff --name-only
-
-printf '\nUntracked files:\n'
-git -C "$SOURCE" ls-files --others --exclude-standard
+printf '\n=== 3. VERIFIED IMMUTABLE RELEASE SNAPSHOT ===\n'
+printf 'Snapshot source: %s\n' "$SOURCE"
+printf 'Verified release HEAD: %s\n' "$FOX_STAGING_EXPECTED_COMMIT"
+printf 'Mutable-repository Git operations: intentionally unavailable\n'
 
 printf '\n=== 4. IDENTIFY THE EXISTING STAGING COMPOSE SERVICE ===\n'
 
@@ -490,10 +490,9 @@ tar \
 
 chmod 600 "${BACKUP_DIR}/fox-ai-agency-source.tgz"
 
-git -C "$SOURCE" status --porcelain=v1 \
+printf '%s\n' 'snapshot-clean=true' \
   >"${BACKUP_DIR}/git-status.txt"
-
-git -C "$SOURCE" rev-parse HEAD \
+printf '%s\n' "$FOX_STAGING_EXPECTED_COMMIT" \
   >"${BACKUP_DIR}/git-head.txt"
 
 chmod 600 \

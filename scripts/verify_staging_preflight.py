@@ -48,13 +48,23 @@ def expected_commit_from_manifest(manifest: Path, required_uid: int) -> str:
         fail("release manifest cannot be read")
 
     values: dict[str, str] = {}
+    allowed_keys = {
+        "FOX_STAGING_EXPECTED_COMMIT",
+        "FOX_STAGING_HANDOFF_SHA256",
+        "FOX_STAGING_PREFLIGHT_SHA256",
+        "FOX_STAGING_COMPOSE_SHA256",
+        "FOX_STAGING_ENV_SHA256",
+        "FOX_STAGING_TREE_SHA256",
+    }
     for raw in lines:
         line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            fail("release manifest must contain only FOX_STAGING_EXPECTED_COMMIT")
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            fail("release manifest contains a malformed line")
         key, value = line.split("=", 1)
-        if key != "FOX_STAGING_EXPECTED_COMMIT" or key in values:
-            fail("release manifest may contain only FOX_STAGING_EXPECTED_COMMIT")
+        if key not in allowed_keys or key in values:
+            fail("release manifest contains an unknown or duplicate key")
         values[key] = value
 
     expected = values.get("FOX_STAGING_EXPECTED_COMMIT", "")
@@ -125,6 +135,10 @@ def main() -> None:
     parser.add_argument("--expected-source-realpath", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--manifest-uid", type=int, default=0)
+    parser.add_argument(
+        "--snapshot-commit",
+        help="required full commit for an immutable snapshot without .git",
+    )
     args = parser.parse_args()
 
     source = Path(args.source)
@@ -133,18 +147,29 @@ def main() -> None:
 
     if not source.is_dir() or source.resolve() != expected_source.resolve():
         fail("repository real path does not match the staging source path")
-    if not (source / ".git").exists():
-        fail("staging source is not a Git repository")
 
     expected_commit = expected_commit_from_manifest(manifest, args.manifest_uid)
-    actual_commit = run_git(source, "rev-parse", "HEAD")
-    if actual_commit != expected_commit:
-        print(f"actual HEAD={actual_commit}", file=sys.stderr)
-        print(f"expected HEAD={expected_commit}", file=sys.stderr)
-        raise SystemExit(1)
-
-    if run_git(source, "status", "--porcelain"):
-        fail("staging source tree is not clean")
+    if args.snapshot_commit:
+        if not SHA_RE.fullmatch(args.snapshot_commit):
+            fail("snapshot commit is malformed")
+        if args.snapshot_commit != expected_commit:
+            fail("snapshot commit does not equal release manifest commit")
+        identity_path = source / ".release-identity"
+        if identity_path.is_symlink() or not identity_path.is_file():
+            fail("immutable snapshot release identity is missing")
+        if identity_path.read_text(encoding="utf-8").strip() != expected_commit:
+            fail("immutable snapshot release identity mismatch")
+        actual_commit = expected_commit
+    else:
+        if not (source / ".git").exists():
+            fail("staging source is not a Git repository")
+        actual_commit = run_git(source, "rev-parse", "HEAD")
+        if actual_commit != expected_commit:
+            print(f"actual HEAD={actual_commit}", file=sys.stderr)
+            print(f"expected HEAD={expected_commit}", file=sys.stderr)
+            raise SystemExit(1)
+        if run_git(source, "status", "--porcelain"):
+            fail("staging source tree is not clean")
 
     verify_authorization(source)
     print(f"Staging release commit: {actual_commit}")
