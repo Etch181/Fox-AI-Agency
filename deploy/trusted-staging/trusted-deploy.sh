@@ -170,6 +170,9 @@ generate_snapshot_compose() {
   {
     printf '%s\n' 'name: fox-ai-staging'
     /usr/bin/sed \
+      -e 's#\(ENABLE_TELEGRAM:[[:space:]]*\)false#\1true#' \
+      -e 's#\(ENABLE_TELEGRAM:[[:space:]]*\)"false"#\1"true"#' \
+      -e '/ENABLE_TELEGRAM:/a\      ENABLE_AGENCY_TELEGRAM_POLLING: "false"' \
       -e 's#^\([[:space:]]*context:[[:space:]]*\).*#\1./source#' \
       -e 's#^\([[:space:]]*env_file:[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \
       -e 's#^\([[:space:]]*-[[:space:]]*\).*\.env\.staging.*#\1./.env.staging#' \

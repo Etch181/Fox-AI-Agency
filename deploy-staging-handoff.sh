@@ -427,6 +427,7 @@ required_environment = {
     "FOX_PUBLIC_BASE_URL": "https://staging.foxaiagency.online",
     "FIRESTORE_DATABASE_ID": "",
     "ENABLE_TELEGRAM": "true",
+    "ENABLE_AGENCY_TELEGRAM_POLLING": "false",
     "ENABLE_META": "false",
     "ENABLE_SMTP": "false",
     "ENABLE_N8N": "false",

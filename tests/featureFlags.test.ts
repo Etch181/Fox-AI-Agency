@@ -23,9 +23,11 @@ test("integration feature flags default to fail-safe (disabled)", () => {
   assert.match(serverSource, /process\.env\.ENABLE_TELEGRAM \|\| ""/);
 });
 
-test("isBotEnabled is sourced from feature flag, not hardcoded to true", () => {
+test("legacy agency polling requires an explicit separate opt-in", () => {
   assert.doesNotMatch(serverSource, /let isBotEnabled = true/);
-  assert.match(serverSource, /let isBotEnabled = INTEGRATION_FLAGS\.telegram/);
+  assert.match(serverSource, /INTEGRATION_FLAGS\.telegram && INTEGRATION_FLAGS\.agencyTelegramPolling/);
+  assert.match(serverSource, /ENABLE_AGENCY_TELEGRAM_POLLING/);
+  assert.match(serverSource, /AGENCY_TELEGRAM_POLLING_DISABLED/);
 });
 
 test("Telegram polling only starts when explicitly enabled", () => {
@@ -42,7 +44,7 @@ test("n8n webhook simulation is gated behind feature flag", () => {
   // Verify ENABLE_N8N is in the INTEGRATION_FLAGS block
   const flagsStart = serverSource.indexOf("const INTEGRATION_FLAGS");
   assert.notEqual(flagsStart, -1);
-  const flagsBlock = serverSource.slice(flagsStart, flagsStart + 500);
+  const flagsBlock = serverSource.slice(flagsStart, flagsStart + 800);
   assert.match(flagsBlock, /n8n/);
   assert.match(flagsBlock, /ENABLE_N8N/);
 });

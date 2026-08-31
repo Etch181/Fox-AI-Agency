@@ -7039,7 +7039,10 @@ app.post(
 // feature flag that defaults to fail-safe (disabled).
 // ============================================================
 const INTEGRATION_FLAGS = {
+  // Tenant Telegram webhooks are enabled by this integration flag.
   telegram: String(process.env.ENABLE_TELEGRAM || "").toLowerCase() === "true",
+  // Legacy agency polling is opt-in separately to prevent webhook/polling overlap.
+  agencyTelegramPolling: String(process.env.ENABLE_AGENCY_TELEGRAM_POLLING || "").toLowerCase() === "true",
   meta: String(process.env.ENABLE_META || "").toLowerCase() === "true",
   smtp: String(process.env.ENABLE_SMTP || "").toLowerCase() === "true",
   externalCrm: String(process.env.ENABLE_EXTERNAL_CRM || "").toLowerCase() === "true",
@@ -7047,7 +7050,8 @@ const INTEGRATION_FLAGS = {
 };
 
 // Telegram Polling Engine for Real-Time Telegram Response
-let isBotEnabled = INTEGRATION_FLAGS.telegram;
+let isBotEnabled =
+  INTEGRATION_FLAGS.telegram && INTEGRATION_FLAGS.agencyTelegramPolling;
 let isPollingActive = false;
 let lastUpdateOffset = 0;
 
@@ -7907,6 +7911,13 @@ app.post(
   authenticateFirebaseRequest,
   requireSuperAdmin,
   async (req, res) => {
+  if (!INTEGRATION_FLAGS.agencyTelegramPolling) {
+    return res.status(409).json({
+      success: false,
+      code: "AGENCY_TELEGRAM_POLLING_DISABLED",
+      error: "Legacy agency polling requires ENABLE_AGENCY_TELEGRAM_POLLING=true",
+    });
+  }
   const { enabled } = req.body;
   if (typeof enabled === "boolean") {
     isBotEnabled = enabled;
