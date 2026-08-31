@@ -13,6 +13,7 @@ readonly ROOT='/docker/fox-ai-staging'
 readonly RELEASES='/docker/fox-ai-staging/releases'
 readonly MANIFEST='/docker/fox-ai-staging/release-manifest.env'
 readonly EXTERNAL_COMPOSE='/docker/fox-ai-staging/docker-compose.yml'
+readonly CREDENTIAL_SOURCE='/docker/fox-ai-staging/secrets/firebase-admin.json'
 readonly STAGING_PROJECT='fox-ai-agency-staging'
 readonly STAGING_CONTAINER='fox-ai-staging'
 readonly STAGING_DOMAIN='staging.foxaiagency.online'
@@ -39,7 +40,7 @@ require_safe_dir() {
   case "$meta" in 0:0:700|0:0:750|0:0:755) ;; *) fail "unsafe directory: $p";; esac
 }
 
-require_ancestors() {
+require_trusted_external_chain() {
   local p=$1
   while :; do
     require_safe_dir "$p"
@@ -48,10 +49,17 @@ require_ancestors() {
   done
 }
 
+require_mutable_source_chain() {
+  local p=$1 actual
+  [ ! -L "$p" ] || fail "mutable source symlink refused: $p"
+  actual=$(/usr/bin/realpath -e -- "$p") || fail "mutable source path unavailable: $p"
+  [ "$actual" = "$p" ] || fail "mutable source path traversal refused: $p"
+}
+
 # Strict data-only parser: no shell interpretation, expansion, whitespace, duplicates, or unknown keys.
 load_manifest() {
   local line key value
-  EXPECTED_COMMIT=''; HANDOFF_SHA=''; PREFLIGHT_SHA=''; COMPOSE_SHA=''; ENV_SHA=''; TREE_SHA=''
+  EXPECTED_COMMIT=''; HANDOFF_SHA=''; PREFLIGHT_SHA=''; COMPOSE_SHA=''; ENV_SHA=''; CREDENTIAL_SHA=''; TREE_SHA=''
   [ ! -L "$MANIFEST" ] || fail 'manifest symlink refused'
   require_root_regular "$MANIFEST" 600
   while IFS= read -r line || [ -n "$line" ]; do
@@ -65,6 +73,7 @@ load_manifest() {
       FOX_STAGING_PREFLIGHT_SHA256) [ -z "$PREFLIGHT_SHA" ] || fail 'duplicate manifest key'; PREFLIGHT_SHA=$value ;;
       FOX_STAGING_COMPOSE_SHA256) [ -z "$COMPOSE_SHA" ] || fail 'duplicate manifest key'; COMPOSE_SHA=$value ;;
       FOX_STAGING_ENV_SHA256) [ -z "$ENV_SHA" ] || fail 'duplicate manifest key'; ENV_SHA=$value ;;
+      FOX_STAGING_CREDENTIAL_SHA256) [ -z "$CREDENTIAL_SHA" ] || fail 'duplicate manifest key'; CREDENTIAL_SHA=$value ;;
       FOX_STAGING_TREE_SHA256) [ -z "$TREE_SHA" ] || fail 'duplicate manifest key'; TREE_SHA=$value ;;
       *) fail "unknown manifest key: $key" ;;
     esac
@@ -74,6 +83,7 @@ load_manifest() {
   is_sha256 "$PREFLIGHT_SHA" || fail 'malformed preflight hash'
   is_sha256 "$COMPOSE_SHA" || fail 'malformed compose hash'
   is_sha256 "$ENV_SHA" || fail 'malformed env hash'
+  is_sha256 "$CREDENTIAL_SHA" || fail 'malformed credential hash'
   is_sha256 "$TREE_SHA" || fail 'malformed release tree hash'
 }
 
@@ -110,10 +120,10 @@ require_snapshot_tree() {
 validate_source() {
   local actual status
   [ "$(id -u)" -eq 0 ] || fail 'root required'
-  require_ancestors /docker
-  require_ancestors "$ROOT"
-  require_ancestors /docker/hermes-agent-6pb0
-  require_ancestors /docker/hermes-agent-6pb0/data
+  require_trusted_external_chain /docker
+  require_trusted_external_chain "$ROOT"
+  require_mutable_source_chain /docker/hermes-agent-6pb0/data
+  require_mutable_source_chain "$SOURCE"
   [ ! -L "$SOURCE" ] || fail 'source symlink refused'
   actual=$(/usr/bin/realpath -e -- "$SOURCE") || fail 'source unavailable'
   [ "$actual" = "$SOURCE_REALPATH" ] || fail 'source realpath mismatch'
@@ -126,6 +136,23 @@ validate_source() {
   [ "$(sha256 "$SOURCE/scripts/verify_staging_preflight.py")" = "$PREFLIGHT_SHA" ] || fail 'preflight hash mismatch'
   [ "$(sha256 "$EXTERNAL_COMPOSE")" = "$COMPOSE_SHA" ] || fail 'compose hash mismatch'
   [ "$(sha256 "$SOURCE/.env.staging")" = "$ENV_SHA" ] || fail 'staging env hash mismatch'
+  [ ! -L "$CREDENTIAL_SOURCE" ] || fail 'credential symlink refused'
+  [ -f "$CREDENTIAL_SOURCE" ] || fail 'credential input missing'
+  [ "$(/usr/bin/realpath -e -- "$CREDENTIAL_SOURCE")" = "$CREDENTIAL_SOURCE" ] || fail 'credential path traversal refused'
+  [ "$(sha256 "$CREDENTIAL_SOURCE")" = "$CREDENTIAL_SHA" ] || fail 'credential hash mismatch'
+}
+
+generate_snapshot_compose() {
+  local root=$1
+  /usr/bin/sed \
+    -e 's#context: /docker/hermes-agent-6pb0/data/fox-ai-agency#context: ./source#' \
+    -e 's#/docker/hermes-agent-6pb0/data/fox-ai-agency/.env.staging#./.env.staging#g' \
+    -e 's#/docker/fox-ai-staging/secrets/firebase-admin.json#./credentials/firebase-admin.json#g' \
+    "$root/docker-compose.source.yml" > "$root/docker-compose.yml"
+  /usr/bin/grep -Fqx '      context: ./source' "$root/docker-compose.yml" || fail 'snapshot compose context rewrite failed'
+  /usr/bin/grep -Fq './credentials/firebase-admin.json' "$root/docker-compose.yml" || fail 'snapshot credential rewrite failed'
+  ! /usr/bin/grep -Fq "$SOURCE" "$root/docker-compose.yml" || fail 'mutable source path remains in snapshot compose'
+  ! /usr/bin/grep -Fq "$CREDENTIAL_SOURCE" "$root/docker-compose.yml" || fail 'mutable credential path remains in snapshot compose'
 }
 
 copy_release_snapshot() {
@@ -137,8 +164,11 @@ copy_release_snapshot() {
   # cp preserves bytes without following the source; links were rejected before copy.
   /bin/cp -a --no-dereference "$SOURCE/." "$tmp/source"
   printf '%s\n' "$EXPECTED_COMMIT" > "$tmp/source/.release-identity"
-  /bin/cp -a --no-dereference "$EXTERNAL_COMPOSE" "$tmp/docker-compose.yml"
+  /bin/cp -a --no-dereference "$EXTERNAL_COMPOSE" "$tmp/docker-compose.source.yml"
   /bin/cp -a --no-dereference "$SOURCE/.env.staging" "$tmp/.env.staging"
+  /usr/bin/install -d -o root -g root -m 0700 "$tmp/credentials"
+  /bin/cp -a --no-dereference "$CREDENTIAL_SOURCE" "$tmp/credentials/firebase-admin.json"
+  generate_snapshot_compose "$tmp"
   /bin/rm -rf -- "$tmp/source/.git"
   /usr/bin/chown -R root:root "$tmp"
   /usr/bin/find "$tmp" -type d -exec /bin/chmod 0700 {} +
@@ -156,11 +186,14 @@ verify_snapshot() {
   reject_links_or_special_files "$release"
   [ "$(sha256 "$release/source/deploy-staging-handoff.sh")" = "$HANDOFF_SHA" ] || fail 'snapshot handoff hash mismatch'
   [ "$(sha256 "$release/source/scripts/verify_staging_preflight.py")" = "$PREFLIGHT_SHA" ] || fail 'snapshot preflight hash mismatch'
-  [ "$(sha256 "$release/docker-compose.yml")" = "$COMPOSE_SHA" ] || fail 'snapshot compose hash mismatch'
+  [ "$(sha256 "$release/docker-compose.source.yml")" = "$COMPOSE_SHA" ] || fail 'snapshot source compose hash mismatch'
   [ "$(sha256 "$release/.env.staging")" = "$ENV_SHA" ] || fail 'snapshot env hash mismatch'
+  [ "$(sha256 "$release/credentials/firebase-admin.json")" = "$CREDENTIAL_SHA" ] || fail 'snapshot credential hash mismatch'
   [ "$(tree_hash "$release/source")" = "$TREE_SHA" ] || fail 'snapshot tree hash mismatch'
   /usr/bin/grep -Fqx 'name: fox-ai-agency-staging' "$release/docker-compose.yml" || fail 'compose project mismatch'
-  /usr/bin/grep -Fq 'context: .' "$release/docker-compose.yml" || fail 'compose build context is not snapshot-local'
+  /usr/bin/grep -Fq 'context: ./source' "$release/docker-compose.yml" || fail 'compose build context is not snapshot-local'
+  /usr/bin/grep -Fq './credentials/firebase-admin.json' "$release/docker-compose.yml" || fail 'compose credential is not snapshot-local'
+  ! /usr/bin/grep -Fq "$SOURCE" "$release/docker-compose.yml" || fail 'mutable source remains in snapshot compose'
   /usr/bin/grep -Fq 'fox-ai-agency-staging' "$release/.env.staging" || fail 'staging project marker absent'
   ! /usr/bin/grep -Eqi 'fox-ai-agency-(prod|production)' "$release/.env.staging" || fail 'production marker found'
 }

@@ -54,6 +54,7 @@ def expected_commit_from_manifest(manifest: Path, required_uid: int) -> str:
         "FOX_STAGING_PREFLIGHT_SHA256",
         "FOX_STAGING_COMPOSE_SHA256",
         "FOX_STAGING_ENV_SHA256",
+        "FOX_STAGING_CREDENTIAL_SHA256",
         "FOX_STAGING_TREE_SHA256",
     }
     for raw in lines:

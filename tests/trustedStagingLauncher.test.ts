@@ -22,6 +22,12 @@ test("external trusted launcher is snapshot-only and staging-pinned", () => {
   assert.match(launcher, /FOX_STAGING_PREFLIGHT_SHA256/);
   assert.match(launcher, /FOX_STAGING_COMPOSE_SHA256/);
   assert.match(launcher, /FOX_STAGING_ENV_SHA256/);
+  assert.match(launcher, /FOX_STAGING_CREDENTIAL_SHA256/);
+  assert.match(launcher, /CREDENTIAL_SOURCE='\/docker\/fox-ai-staging\/secrets\/firebase-admin\.json'/);
+  assert.match(launcher, /require_trusted_external_chain/);
+  assert.match(launcher, /require_mutable_source_chain/);
+  assert.match(launcher, /generate_snapshot_compose/);
+  assert.match(launcher, /credentials\/firebase-admin\.json/);
   assert.match(launcher, /unknown manifest key/);
   assert.match(launcher, /duplicate manifest key/);
   assert.doesNotMatch(launcher, /\bsource\s+.*manifest/i);
@@ -52,5 +58,6 @@ test("manifest template contains only strict non-secret release policy keys", ()
   assert.match(manifest, /^FOX_STAGING_PREFLIGHT_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
   assert.match(manifest, /^FOX_STAGING_COMPOSE_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
   assert.match(manifest, /^FOX_STAGING_ENV_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
+  assert.match(manifest, /^FOX_STAGING_CREDENTIAL_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_SHA256$/m);
   assert.doesNotMatch(manifest, /(?:TOKEN|PASSWORD|PRIVATE_KEY|API_KEY)\s*=/i);
 });
