@@ -244,8 +244,13 @@ main() {
   exec 9>"$LOCK"; /usr/bin/flock -n 9 || fail 'deployment lock held'
   validate_inputs                    # validate external runtime inputs before acquisition
   local release="${RELEASES}/${EXPECTED_COMMIT}"
-  copy_release_snapshot "$release"
-  verify_snapshot "$release"         # verify copied immutable bytes
+  if [ -e "$release" ]; then
+    printf 'Existing immutable release snapshot found; verifying for safe reuse.\n'
+    verify_snapshot "$release"
+  else
+    copy_release_snapshot "$release"
+    verify_snapshot "$release"
+  fi
   # No repository pathname is used after this point.
   exec /usr/bin/env -i PATH="$PATH" HOME=/root LANG=C LC_ALL=C \
     FOX_STAGING_RELEASE_ROOT="$release" \

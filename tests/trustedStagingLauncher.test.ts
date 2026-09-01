@@ -52,7 +52,10 @@ test("external trusted launcher acquires only the pinned remote tree and snapsho
   assert.doesNotMatch(launcher, /\/docker\/hermes-agent-6pb0\/data\/fox-ai-agency/);
   assert.doesNotMatch(launcher, /\bsource\s+.*manifest/i);
   assert.doesNotMatch(launcher, /\beval\b/);
-  assert.match(launcher, /copy_release_snapshot/);
+  assert.match(launcher, /Existing immutable release snapshot found; verifying for safe reuse/);
+  assert.match(launcher, /if \[ -e "\$release" \]; then/);
+  assert.match(launcher, /verify_snapshot "\$release"/);
+  assert.match(launcher, /copy_release_snapshot "\$release"/);
   assert.match(launcher, /verify_snapshot/);
   assert.match(launcher, /env -i/);
   assert.doesNotMatch(launcher, /name: fox-ai-agency-staging/);
