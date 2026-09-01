@@ -110,8 +110,10 @@ reject_links_or_special_files() {
 
 require_snapshot_tree() {
   local root=$1 unsafe
-  unsafe=$(/usr/bin/find "$root" -xdev \( -not -user root -o -not -group root -o -perm /022 \) -print -quit)
+  unsafe=$(/usr/bin/find "$root" -xdev ! -path "$root/credentials/firebase-admin.json" \( -not -user root -o -not -group root -o -perm /022 \) -print -quit)
   [ -z "$unsafe" ] || fail "snapshot ownership/mode violation: $unsafe"
+  [ "$([ -L "$root/credentials/firebase-admin.json" ] && printf symlink || printf regular)" = 'regular' ] || fail 'snapshot credential symlink refused'
+  [ "$(/usr/bin/stat -c '%u:%g:%a' "$root/credentials/firebase-admin.json")" = '1001:1001:400' ] || fail 'snapshot credential runtime mode violation'
 }
 
 validate_inputs() {
@@ -206,6 +208,10 @@ copy_release_snapshot() {
   /usr/bin/chown -R root:root "$tmp"
   /usr/bin/find "$tmp" -type d -exec /bin/chmod 0700 {} +
   /usr/bin/find "$tmp" -type f -exec /bin/chmod 0600 {} +
+  # Docker bind-mount setup is performed by the host daemon; inside the mount,
+  # only foxapp (uid/gid 1001) may read this immutable credential.
+  /usr/bin/chown 1001:1001 "$tmp/credentials/firebase-admin.json"
+  /bin/chmod 0400 "$tmp/credentials/firebase-admin.json"
   /bin/chmod 0700 "$tmp/source/deploy-staging-handoff.sh"
   /bin/chmod 0700 "$tmp/source/scripts/verify_staging_preflight.py"
   [ ! -e "$release" ] || fail 'release snapshot already exists'

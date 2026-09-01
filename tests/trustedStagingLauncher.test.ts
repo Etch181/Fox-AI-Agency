@@ -44,6 +44,9 @@ test("external trusted launcher acquires only the pinned remote tree and snapsho
   assert.match(launcher, /unexpected remote tree entry/);
   assert.match(launcher, /generate_snapshot_compose/);
   assert.match(launcher, /credentials\/firebase-admin\.json/);
+  assert.match(launcher, /chown 1001:1001/);
+  assert.match(launcher, /chmod 0400/);
+  assert.match(launcher, /1001:1001:400/);
   assert.match(launcher, /unknown manifest key/);
   assert.match(launcher, /duplicate manifest key/);
   assert.doesNotMatch(launcher, /\/docker\/hermes-agent-6pb0\/data\/fox-ai-agency/);

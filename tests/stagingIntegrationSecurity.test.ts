@@ -156,6 +156,9 @@ test("staging handoff excludes env secrets, requires a clean tree, and verifies 
   assert.match(deploymentSource, /process\.versions\.node/);
   assert.match(deploymentSource, /error_marker_lines/);
   assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);
+  assert.match(deploymentSource, /credential_volume\.get\("type"\) != "bind"/);
+  assert.match(deploymentSource, /credential_volume\.get\("read_only"\) is not True/);
+  assert.match(deploymentSource, /read-only snapshot bind/);
   assert.match(deploymentSource, /Automated deployment checks: PASS/);
   assert.doesNotMatch(deploymentSource, /Deployment result: PASS/);
   assert.match(deploymentSource, /verify_staging_preflight\.py/);

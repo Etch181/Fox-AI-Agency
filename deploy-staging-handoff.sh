@@ -449,15 +449,33 @@ if not credential_target or "staging" not in credential_target.lower():
     )
 
 credential_source = None
+credential_volume = None
 for volume in service.get("volumes") or []:
     if not isinstance(volume, dict):
         continue
     if str(volume.get("target") or "") == credential_target:
         credential_source = str(volume.get("source") or "")
+        credential_volume = volume
         break
 
-if not credential_source or not os.path.isfile(credential_source):
-    raise SystemExit("Staging credential volume source was not found")
+expected_credential_source = os.path.realpath(
+    os.path.join(
+        os.path.dirname(config_path),
+        "credentials",
+        "firebase-admin.json",
+    )
+)
+if (
+    not credential_source
+    or not credential_volume
+    or credential_volume.get("type") != "bind"
+    or credential_volume.get("read_only") is not True
+    or os.path.realpath(credential_source) != expected_credential_source
+    or not os.path.isfile(credential_source)
+):
+    raise SystemExit(
+        "Resolved staging credential mount is not the read-only snapshot bind"
+    )
 
 with open(credential_source, encoding="utf-8") as handle:
     credential = json.load(handle)
