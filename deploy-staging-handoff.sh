@@ -458,9 +458,10 @@ for volume in service.get("volumes") or []:
         credential_volume = volume
         break
 
+release_root = os.path.dirname(os.path.realpath(expected_source))
 expected_credential_source = os.path.realpath(
     os.path.join(
-        os.path.dirname(config_path),
+        release_root,
         "credentials",
         "firebase-admin.json",
     )

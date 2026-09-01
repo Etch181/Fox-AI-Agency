@@ -156,6 +156,8 @@ test("staging handoff excludes env secrets, requires a clean tree, and verifies 
   assert.match(deploymentSource, /process\.versions\.node/);
   assert.match(deploymentSource, /error_marker_lines/);
   assert.doesNotMatch(deploymentSource, /for line in selected\[-120:\]/);
+  assert.match(deploymentSource, /release_root = os\.path\.dirname\(os\.path\.realpath\(expected_source\)\)/);
+  assert.doesNotMatch(deploymentSource, /os\.path\.dirname\(config_path\),\n        "credentials"/);
   assert.match(deploymentSource, /credential_volume\.get\("type"\) != "bind"/);
   assert.match(deploymentSource, /credential_volume\.get\("read_only"\) is not True/);
   assert.match(deploymentSource, /read-only snapshot bind/);
