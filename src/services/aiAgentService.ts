@@ -1,20 +1,20 @@
-import { aiModelAnalyticsService } from "./aiModelAnalyticsService";
+import { aiModelAnalyticsService } from "./aiModelAnalyticsService.ts";
 import { GoogleGenAI, Type } from "@google/genai";
 import OpenAI from "openai";
-import { checkAvailability, bookAppointmentInSheet } from "./googleSheetsService";
-import { workspaceDataService } from "./workspaceDataService";
-import { triggerExternalCRM } from "./crmService";
-import { sharedMemoryService } from "./sharedMemoryService";
-import { creditService } from "./creditService";
-import { couponService } from "./couponService";
-import { workspaceCrmService } from "./workspaceCrmService";
+import { checkAvailability, bookAppointmentInSheet } from "./googleSheetsService.ts";
+import { workspaceDataService } from "./workspaceDataService.ts";
+import { triggerExternalCRM } from "./crmService.ts";
+import { sharedMemoryService } from "./sharedMemoryService.ts";
+import { creditService } from "./creditService.ts";
+import { couponService } from "./couponService.ts";
+import { workspaceCrmService } from "./workspaceCrmService.ts";
 import {
   hasBookingDateSignal,
   hasBookingTimeSignal,
   parseBookingDateTime,
   parseBookingIdentity,
-} from "./bookingDateTimeParser";
-import { answerTenantBusinessInquiry } from "./tenantBusinessInquiry";
+} from "./bookingDateTimeParser.ts";
+import { answerTenantBusinessInquiry } from "./tenantBusinessInquiry.ts";
 
 export interface AiAgentConfig {
   agentName?: string;

@@ -17,7 +17,7 @@ import {
   AuditLog,
   GeminiTenantMetrics,
   GeminiErrorLog,
-} from "../types";
+} from "../types.ts";
 import { Timestamp } from "firebase/firestore";
 
 export const INITIAL_PLANS: SubscriptionPlan[] = [

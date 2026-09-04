@@ -1,8 +1,8 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 import {
   formatDateKeyInTimeZone,
   isBusinessDateTimeInPast,
-} from "../utils/dateOnly";
+} from "../utils/dateOnly.ts";
 
 function sanitizeForFirestore<T>(value: T): T {
   if (value === undefined || value === null) {

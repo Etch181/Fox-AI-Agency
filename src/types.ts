@@ -1,7 +1,7 @@
 import type { Timestamp } from "firebase/firestore";
-import type { UserRole } from "./security/appAuthorization";
+import type { UserRole } from "./security/appAuthorization.ts";
 
-export type { UserRole } from "./security/appAuthorization";
+export type { UserRole } from "./security/appAuthorization.ts";
 
 export interface User {
   id: string;
@@ -81,6 +81,12 @@ export interface Workspace {
   googleSheetsConnectedAt?: string;
   externalCrmWebhookConfigured?: boolean;
   externalCrmWebhookUpdatedAt?: string;
+
+  // Instagram Business Account (workspace-scoped)
+  instagramBusinessAccountId?: string;
+  instagramConnectedAt?: string;
+  instagramBotStatus?: "connected" | "disconnected" | "pending";
+  metaPageId?: string;
 }
 
 export interface RegistrationConfirmation {

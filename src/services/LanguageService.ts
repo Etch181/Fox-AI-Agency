@@ -1,6 +1,6 @@
 import { collection, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
-import { db } from "./firebase";
-import { useApp } from "../context/AppContext";
+import { db } from "./firebase.ts";
+import { useApp } from "../context/AppContext.tsx";
 
 export type Language = "ar" | "en";
 export type TextDirection = "rtl" | "ltr";

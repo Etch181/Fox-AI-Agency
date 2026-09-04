@@ -1,4 +1,4 @@
-import { auth } from "./firebase";
+import { auth } from "./firebase.ts";
 
 export async function authenticatedFetch(
   input: RequestInfo | URL,

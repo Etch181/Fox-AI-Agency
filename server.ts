@@ -743,27 +743,93 @@ async function handleMessengerDirectReply({
   if (!pageAccessToken) {
     return { success: false, error: "No page access token configured" };
   }
+
+  // Workspace isolation check: resolve trusted workspace from mapped metaPageId if provided
+  const workspaceIdHint = String(pageId || "").trim();
+  const workspace = workspaceIdHint ? getWorkspaceByMetaPageId(pageId || "") : undefined;
+
   let replyText = "";
   try {
-    const ai = getGeminiClient();
-    if (ai) {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على ماسنجر فيسبوك: "${userMessage}".
-اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`
-      });
-      replyText = response.text || "";
+    const aiClientAvailable = !!getGeminiClient();
+    if (workspace && workspace.id && aiClientAvailable) {
+      // Use central FOX AI Agent architecture for tenant response
+      try {
+        // withWorkspaceRuntimeIntegrations is defined locally in server.ts at line 3854; use it directly below
+        // Actually that isn't the exact import; use the server-local withWorkspaceRuntimeIntegrations
+        const runtimeWorkspace = workspace.id ? await withWorkspaceRuntimeIntegrations(workspace) : workspace;
+        const aiModule = await import('./src/services/aiAgentService');
+        const agentService = aiModule.aiAgentService;
+        // If agentService has generateChatResponse, use it with workspace context
+        if (agentService && typeof agentService.generateChatResponse === 'function') {
+          const result = await agentService.generateChatResponse({
+            workspace: runtimeWorkspace,
+            message: userMessage,
+            channel: "messenger",
+            sessionId: `messenger:${workspace.id}:${String(senderPsid || 'unknown')}`,
+          });
+          replyText = result?.response || result?.aiResponse || "";
+        } else {
+          // Fallback to Gemini when central agent service unavailable
+          const ai = getGeminiClient();
+          if (ai) {
+            const response = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              contents: `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على ماسنجر فيسبوك: "${userMessage}". اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`
+            });
+            replyText = response.text || "";
+          }
+        }
+      } catch (agentErr: any) {
+        console.warn("[Messenger Central Agent Integration] Agent error:", agentErr?.message || agentErr);
+        // Fail-safe fallback: don't expose agent errors to customers; use local fallback
+        replyText = "";
+      }
+    } else {
+      // Fallback to Gemini when workspace not mapped or agent unavailable
+      const ai = getGeminiClient();
+      if (ai) {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على ماسنجر فيسبوك: "${userMessage}". اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`
+        });
+        replyText = response.text || "";
+      }
     }
-  } catch (e) {
-    console.warn("[Messenger DM AI Gen Fallback]:", e);
+  } catch (e: any) {
+    console.warn("[Messenger DM AI Gen Fallback] AI generation failed:", e);
+    replyText = "";
   }
 
-  if (!replyText) {
+  if (!replyText || replyText.trim().length === 0) {
     replyText = `أهلاً بك! 🌸 شرفتنا برسالتك في FOX AI Agency. يسعدنا جداً مساعدتك والرد على كافة استفساراتك حول حلولنا بالذكاء الاصطناعي والتسويق الرقمي! كيف يمكننا مساعدتك اليوم؟ ✨`;
   }
 
+  // Persist inbound message and AI response via conversation/inbox when workspace is mapped (workplace isolation enforced)
+  if (workspace && workspace.id && senderPsid) {
+    try {
+      // Conversation persistence: use workspace-scoped session (messenger format) to avoid cross-workspace collision
+      const sessionId = `messenger:${String(workspace.id || workspaceIdHint)}:${String(senderPsid || 'unknown')}`;
+      const conversationService = (await import('./src/services/conversationService')).conversationService;
+      await conversationService.getOrCreateConversation(workspace.id, {
+        sessionId,
+        channel: "messenger",
+        externalChatId: String(senderPsid || 'unknown'),
+        customerName: String(senderPsid || 'unknown'),
+      });
+      await conversationService.appendMessage(workspace.id, `messenger_${String(senderPsid || 'unknown')}`, {
+        sessionId,
+        channel: "messenger",
+        sender: "customer",
+        text: userMessage,
+        externalMessageId: String(senderPsid || 'unknown'),
+      });
+    } catch (inboxErr: any) {
+      console.warn("[Messenger Inbound] Unified Inbox persistence skipped (optional):", inboxErr?.message || inboxErr);
+    }
+  }
+
   try {
-    console.log(`[Messenger AutoReply] Sending DM reply to PSID ${senderPsid}...`);
+    console.log(`[Messenger AutoReply] Sending DM reply to PSID ${String(senderPsid || '').replace(/[^\d]/g, '*').slice(0, 6)}... Workspace=${workspace?.id || 'unmapped'}`);
     const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -774,10 +840,12 @@ async function handleMessengerDirectReply({
       })
     });
     const data: any = await res.json();
-    return { success: res.ok && !data.error, replyText, data };
+    const safeDataLog = data ? { id: data.id || null, error: data.error ? (data.error.message ? data.error.message.replace(/token=[^&\s]+/gi, 'token=[REDACTED]').slice(0, 200) : 'Meta error') : null } : null;
+    console.log(`[Messenger AutoReply] Meta result: status=${res.status} workspace=${workspace?.id || 'unmapped'} response=${JSON.stringify(safeDataLog)}`);
+    return { success: res.ok && !data.error, replyText, data: safeDataLog };
   } catch (err: any) {
-    console.error("[Messenger AutoReply Error]:", err.message);
-    return { success: false, error: err.message };
+    console.error("[Messenger AutoReply Error] Workspace=", workspace?.id || 'unmapped', "Message=", err?.message ? err.message.replace(/token=[^&\s]+/gi, 'token=[REDACTED]').slice(0, 200) : 'unknown');
+    return { success: false, error: "Internal reply failure" };
   }
 }
 

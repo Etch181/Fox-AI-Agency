@@ -1,4 +1,4 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 
 export interface WorkspaceCreditState {
   workspaceId: string;

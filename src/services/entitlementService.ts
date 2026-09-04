@@ -14,7 +14,14 @@ export type FoxFeature =
   | "multiple_agents"
   | "custom_prompt"
   | "staff_accounts"
-  | "api_access";
+  | "api_access"
+  | "instagram_messaging"   // For Instagram Direct Messages
+  | "instagram_comments"    // For Instagram Comment replies
+  | "instagram_publish"     // For Instagram publishing (when supported)
+  | "marketing_engine"      // For the real Marketing Engine (auto-publish)
+  | "appointment_reminder"  // For the Appointment Reminder Engine
+  | "marketing_campaign"    // For the Marketing Campaign/Broadcast Engine (Phase 2)
+  | "email_otp";             // For Email OTP (Phase 2)
 
 const PLAN_FEATURES: Record<PlanId, FoxFeature[]> = {
   starter: [
@@ -37,6 +44,10 @@ const PLAN_FEATURES: Record<PlanId, FoxFeature[]> = {
     "industry_module",
     "google_sheets",
     "custom_prompt",
+    "instagram_messaging",   // Business plan gets Instagram Messaging
+    "instagram_comments",    // Business plan gets Instagram Comments
+    "marketing_engine",      // Business plan gets Marketing Engine
+    "appointment_reminder",  // Business plan gets Appointment Reminder
   ],
 
   enterprise: [
@@ -54,6 +65,13 @@ const PLAN_FEATURES: Record<PlanId, FoxFeature[]> = {
     "custom_prompt",
     "staff_accounts",
     "api_access",
+    "instagram_messaging",   // Enterprise plan gets all Instagram features
+    "instagram_comments",
+    "instagram_publish",     // Enterprise gets publishing (when supported)
+    "marketing_engine",
+    "appointment_reminder",
+    "marketing_campaign",    // Enterprise gets Campaign Engine
+    "email_otp",             // Enterprise gets Email OTP
   ],
 };
 

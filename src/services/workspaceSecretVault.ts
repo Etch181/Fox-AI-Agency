@@ -1,8 +1,8 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 import {
   encryptSecret,
   decryptSecret,
-} from "./secretService";
+} from "./secretService.ts";
 
 export type WorkspaceSecretName =
   | "telegramBotToken"
@@ -11,7 +11,9 @@ export type WorkspaceSecretName =
   | "facebookPageAccessToken"
   | "facebookVerifyToken"
   | "googleSheetsAccessToken"
-  | "externalCrmWebhookUrl";
+  | "externalCrmWebhookUrl"
+  | "instagramAccessToken"
+  | "instagramBusinessAccountId";
 
 function getSecretRef(
   workspaceId: string,

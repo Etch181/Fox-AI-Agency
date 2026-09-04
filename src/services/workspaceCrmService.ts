@@ -1,6 +1,6 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 import { FieldValue } from "firebase-admin/firestore";
-import { crmEventService } from "./crmEventService";
+import { crmEventService } from "./crmEventService.ts";
 
 export type CrmChannel =
   | "telegram"

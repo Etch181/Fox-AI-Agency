@@ -1,4 +1,4 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 import { FieldValue } from "firebase-admin/firestore";
 
 export interface ConversationMessage {

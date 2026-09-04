@@ -1,4 +1,4 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 
 function sanitizeForFirestore<T>(value: T): T {
   if (Array.isArray(value)) {

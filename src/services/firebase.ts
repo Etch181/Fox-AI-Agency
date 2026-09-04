@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
-export { sanitizeForFirestore } from '../utils/firestoreSanitize';
+export { sanitizeForFirestore } from '../utils/firestoreSanitize.ts';
 
 // --- Environment-driven browser/client Firebase config (FAIL-CLOSED) ---
 // The client SDK must NEVER fall back to the legacy production config in

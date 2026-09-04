@@ -1,10 +1,11 @@
-import { adminDb } from "./firebaseAdmin";
+import { adminDb } from "./firebaseAdmin.ts";
 import { FieldValue } from "firebase-admin/firestore";
 
 export type ConversationChannel =
   | "telegram"
   | "whatsapp"
   | "instagram"
+  | "messenger"
   | "web";
 
 export type ConversationSender =

@@ -1,5 +1,5 @@
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth } from './firebase.ts';
 
 const provider = new GoogleAuthProvider();
 // Add Gmail scopes requested for email sending and reading

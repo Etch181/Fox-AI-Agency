@@ -1,5 +1,5 @@
 import { GoogleAuthProvider, signInWithPopup, User } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth } from './firebase.ts';
 
 export const signInWithGoogleSheets = async (): Promise<{ user: User; accessToken: string }> => {
   try {
