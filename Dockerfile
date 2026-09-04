@@ -10,7 +10,18 @@
 FROM node:24-alpine AS builder
 
 # Git is required only in this builder stage by the staging preflight fixture tests.
-RUN apk add --no-cache ca-certificates python3 git
+#
+# openjdk21-jre-headless is required by the Firestore emulator (used by
+# `npm run test:integration` in the verification gate below). It is
+# installed in the BUILDER stage only — the runtime image (Stage 2) is
+# intentionally not given Java or the emulator so the shipped container
+# stays minimal and hardened.
+#
+# JAVA_HOME is exported so the integration-test runner script can locate
+# the JRE without hardcoding a path. On Alpine 3.21+ the package installs
+# at /usr/lib/jvm/java-21-openjdk.
+RUN apk add --no-cache ca-certificates python3 git openjdk21-jre-headless
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 
 WORKDIR /app
 
@@ -39,8 +50,14 @@ ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY \
     VITE_FIREBASE_MESSAGING_SENDER_ID=$VITE_FIREBASE_MESSAGING_SENDER_ID \
     VITE_FIREBASE_APP_ID=$VITE_FIREBASE_APP_ID
 
-# Verify and build the application (client + server bundles)
-RUN npm run lint && npm test && npm run build
+# Verify and build the application (client + server bundles).
+#
+# `npm run test:integration` runs the full test suite under a throwaway
+# local Firestore emulator, so the integration tests (which need an
+# authenticated Firebase Admin SDK) can pass without pointing at a
+# real Firestore project. The script lives at
+# `scripts/run-integration-tests.mjs` and is repo-owned.
+RUN npm run lint && npm run test:integration && npm run build
 
 # ---- Stage 2: Runtime ----
 FROM node:24-alpine AS runtime
