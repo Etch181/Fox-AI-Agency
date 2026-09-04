@@ -16,6 +16,8 @@ export const ClientIntegrations: React.FC = () => {
   const isTelegramConnected =
     currentWorkspace.telegramBotStatus === "connected";
 
+  const isInstagramConnected = currentWorkspace?.instagramBotStatus === "connected" || Boolean(currentWorkspace?.instagramBusinessAccountId);
+
   const integrations = {
     messaging: [
       {
@@ -29,7 +31,7 @@ export const ClientIntegrations: React.FC = () => {
         id: "instagram",
         name: "Instagram Direct",
         icon: <Instagram className="h-6 w-6 text-pink-500"/>,
-        connected: false,
+        connected: isInstagramConnected,
         desc: isAr ? "الرد الآلي على رسائل انستجرام والتعليقات" : "Auto-reply to Instagram DMs & comments",
       },
       {
@@ -115,9 +117,28 @@ export const ClientIntegrations: React.FC = () => {
             </div>
             
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (integration.id === "whatsapp") {
                   setShowWhatsAppQR(true);
+                } else if (integration.id === "instagram") {
+                  if (!integration.connected) {
+                    try {
+                      const res = await fetch("/api/integrations/instagram/connect", { method: "GET", credentials: "include" });
+                      const data = await res.json();
+                      if (data.authUrl) window.open(data.authUrl, "_blank", "noopener,noreferrer");
+                    } catch (e) {
+                      console.warn("Instagram connect failed:", e);
+                    }
+                  } else {
+                    if (confirm(isAr ? "إلغاء ربط Instagram؟" : "Disconnect Instagram?")) {
+                      try {
+                        await fetch("/api/integrations/instagram/disconnect", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
+                        window.location.reload();
+                      } catch (e) {
+                        console.warn("Instagram disconnect failed:", e);
+                      }
+                    }
+                  }
                 }
               }}
               className={`w-full py-2.5 rounded-xl text-xs font-bold transition ${

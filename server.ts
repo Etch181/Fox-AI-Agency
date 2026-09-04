@@ -63,6 +63,7 @@ import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
 import { metaStagingFatalDecision } from "./src/utils/bootDecision";
 import { printEnvValidation } from "./src/utils/envValidation";
+import { instagramIntegrationRouter } from "./src/services/instagramIntegrationRouter";
 import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
 import {
   normalizeRegistrationEmail,
@@ -8843,6 +8844,11 @@ async function startServer() {
   // Configure tenant Telegram webhooks only AFTER
   // Firestore tenants and encrypted tokens are hydrated.
   await syncWorkspaceTelegramBots();
+
+  // --------------------------------------------------------
+  // Instagram OAuth Integration (secure staging layer)
+  // --------------------------------------------------------
+  app.use("/api/integrations/instagram", instagramIntegrationRouter);
 
   console.log(
     `🌐 [FOX Telegram Runtime] Tenant mode=webhook | PublicBaseURL=${getFoxPublicBaseUrl() || "NOT_CONFIGURED"}`
