@@ -61,6 +61,7 @@ import {
 } from "./src/services/paymentSubmissionService";
 import { emailService } from "./src/services/emailService";
 import { TrialLimitManager } from "./src/services/TrialLimitManager";
+import { metaStagingFatalDecision } from "./src/utils/bootDecision";
 import { printEnvValidation } from "./src/utils/envValidation";
 import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
 import {
@@ -8792,6 +8793,12 @@ async function startServer() {
   if (!envValidation.valid && envValidation.isProduction) {
     console.error(
       "❌ [FOX Boot] Production environment validation failed. Missing required variables. Exiting."
+    );
+    process.exit(1);
+  }
+  if (metaStagingFatalDecision(envValidation, process.env.ENABLE_META)) {
+    console.error(
+      "❌ [FOX Boot] Staging Meta enabled but required Meta secrets (META_APP_SECRET / META_WEBHOOK_VERIFY_TOKEN) are missing. Exiting."
     );
     process.exit(1);
   }

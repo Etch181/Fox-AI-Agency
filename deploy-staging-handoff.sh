@@ -428,7 +428,7 @@ required_environment = {
     "FIRESTORE_DATABASE_ID": "",
     "ENABLE_TELEGRAM": "true",
     "ENABLE_AGENCY_TELEGRAM_POLLING": "false",
-    "ENABLE_META": "false",
+    "ENABLE_META": "true",
     "ENABLE_SMTP": "false",
     "ENABLE_N8N": "false",
     "ENABLE_EXTERNAL_CRM": "false",

@@ -117,6 +117,16 @@ export function validateEnvironment(): EnvValidationResult {
     missing.push("FOX_PUBLIC_BASE_URL (or PUBLIC_BASE_URL / APP_URL)");
   }
 
+  // Meta runtime secrets: required when ENABLE_META=true. Never exposed to frontend/Vite.
+  if (process.env.ENABLE_META === "true") {
+    if (!process.env.META_APP_SECRET?.trim()) {
+      missing.push("META_APP_SECRET");
+    }
+    if (!process.env.META_WEBHOOK_VERIFY_TOKEN?.trim()) {
+      missing.push("META_WEBHOOK_VERIFY_TOKEN");
+    }
+  }
+
   // Warnings for optional but recommended staging integrations
   if (isStaging || isProduction) {
     if (process.env.ENABLE_TELEGRAM === "true" && !process.env.TELEGRAM_BOT_TOKEN?.trim()) {

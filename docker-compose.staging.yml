@@ -31,9 +31,9 @@ services:
       NODE_ENV: production
       FOX_INTERNAL_PORT: 3000
       FOX_LISTEN_HOST: 0.0.0.0
-      # Integrations disabled by default (fail-safe)
+      # Staging integrations (Meta enabled; SMTP/CRM/N8N disabled for fail-safe)
       ENABLE_TELEGRAM: false
-      ENABLE_META: false
+      ENABLE_META: true
       ENABLE_SMTP: false
       ENABLE_EXTERNAL_CRM: false
       ENABLE_N8N: false
