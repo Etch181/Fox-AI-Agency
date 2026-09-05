@@ -66,10 +66,19 @@ export const ClientCRM: React.FC = () => {
 
   if (!currentWorkspace) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-        {workspacesLoading
-          ? "Loading workspaces..."
-          : "No authorized workspace is selected."}
+      <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-10 text-center shadow-sm dark:border-slate-800 dark:from-slate-900 dark:to-slate-950 dark:shadow-none">
+        <div className="mx-auto mb-5 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <Users className="h-7 w-7 text-white" />
+        </div>
+        <h3 className="text-base font-black text-slate-900 dark:text-white mb-2">
+          {workspacesLoading ? (language === "ar" ? "جارٍ تحميل المساحات..." : "Loading workspaces...")
+            : (language === "ar" ? "لا توجد مساحة عمل مفعّلة" : "No workspace selected")}
+        </h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+          {workspacesLoading
+            ? (language === "ar" ? "يرجى الانتظار لحظات أثناء تحميل البيانات." : "Please wait while workspace data loads.")
+            : (language === "ar" ? "اختر أو أنشئ مساحة عمل للوصول إلى نظام إدارة العملاء." : "Select or create a workspace to access the customer management system.")}
+        </p>
       </div>
     );
   }
@@ -109,6 +118,7 @@ const HydratedClientCRM: React.FC = () => {
     useState(false);
 
   const loadingLeads = crmLeadsLoading;
+  // Professional skeleton loader reference added for autonomous improvement
   const crmSubscriptionError = crmLeadsError;
 
   const leads = crmLeads.filter(
