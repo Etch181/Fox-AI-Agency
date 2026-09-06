@@ -121,7 +121,7 @@ export const ClientMarketingAgent: React.FC = () => {
         const randomImg = sampleVisuals[Math.floor(Math.random() * sampleVisuals.length)];
 
         const newResult: GeneratedSocialPost = {
-          workspaceId: currentWorkspace?.id || "demo",
+          workspaceId: currentWorkspace?.id || "",
           platform: selectedPlatform,
           topic: topic || (isAr ? "منشور تسويقي مميز" : "Social Marketing Post"),
           content: data.postContent,
