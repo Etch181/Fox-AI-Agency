@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateOAuthState, verifyOAuthState } from "../src/utils/instagramOAuthState";
+import { generateOAuthState, verifyOAuthState } from "../src/utils/instagramOAuthState.ts";
 
 test("OAuth state generation produces unique tokens", () => {
   const a = generateOAuthState("ws_1", "owner");
