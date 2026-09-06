@@ -527,6 +527,12 @@ const AppContent: React.FC = () => {
             <ClientIntegrations />
           </WorkspaceGuard>
         );
+      case "agent_registry":
+        return (
+          <WorkspaceGuard>
+            <AgentRegistryPage />
+          </WorkspaceGuard>
+        );
 
       default:
         return currentUser.role === "super_admin" ? (

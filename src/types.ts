@@ -500,3 +500,210 @@ export interface CourseReview {
   status: "published" | "hidden";
   reply?: string;
 }
+
+// ============================================================
+// FOX AGENT CONTROL PLANE TYPES
+// ============================================================
+
+export type AgentStatus = 'active' | 'idle' | 'running' | 'paused' | 'error' | 'offline';
+export type AgentRole = 
+  | 'product-developer'
+  | 'qa-technical-reviewer'
+  | 'staging-release'
+  | 'knowledge'
+  | 'sales'
+  | 'customer-support'
+  | 'marketing'
+  | 'monitoring'
+  | 'executive-reporting'
+  | 'custom';
+
+export type TaskStatus = 
+  | 'new'
+  | 'planned'
+  | 'assigned'
+  | 'running'
+  | 'review'
+  | 'verified'
+  | 'done'
+  | 'failed'
+  | 'diagnose'
+  | 'retry'
+  | 'blocked_owner';
+
+export type TaskType = 
+  | 'code_development'
+  | 'code_review'
+  | 'staging_deploy'
+  | 'knowledge_management'
+  | 'crm_operation'
+  | 'support_operation'
+  | 'marketing_operation'
+  | 'monitoring_check'
+  | 'executive_report'
+  | 'audit'
+  | 'self_healing'
+  | 'custom';
+
+export type TriggerType = 
+  | 'owner_command'
+  | 'scheduled'
+  | 'system_event'
+  | 'workflow_event'
+  | 'failure_event'
+  | 'manual';
+
+export type ApprovalType = 
+  | 'production_deploy'
+  | 'new_secret'
+  | 'destructive_action'
+  | 'payment_approval'
+  | 'third_party_approval'
+  | 'business_decision';
+
+export type HealthStatus = 'healthy' | 'degraded' | 'critical' | 'unknown';
+
+export interface AgentModelConfig {
+  primaryProvider: string;
+  primaryModel: string;
+  fallbackProviders: string[];
+  fallbackModels: string[];
+}
+
+export interface AgentCapabilities {
+  allowedActions: string[];
+  restrictedActions: string[];
+  triggerTypes: TriggerType[];
+  workflowIds: string[];
+  requiresApprovalFor: ApprovalType[];
+}
+
+export interface FoxAgent {
+  id: string;
+  name: string;
+  role: AgentRole;
+  description: string;
+  status: AgentStatus;
+  capabilities: AgentCapabilities;
+  modelConfig: AgentModelConfig;
+  lastExecutionAt?: string;
+  lastExecutionStatus?: TaskStatus;
+  successCount: number;
+  failureCount: number;
+  health: HealthStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FoxTask {
+  id: string;
+  title: string;
+  description: string;
+  taskType: TaskType;
+  intent: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  status: TaskStatus;
+  targetAgentId: string;
+  assignedAgentId?: string;
+  dependencies: string[];
+  approvalRequired: boolean;
+  approvalType?: ApprovalType;
+  reviewRequired: boolean;
+  reviewAgentId?: string;
+  triggerType: TriggerType;
+  triggerSource: string;
+  payload: Record<string, any>;
+  result?: Record<string, any>;
+  error?: string;
+  retryCount: number;
+  maxRetries: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface FoxExecution {
+  id: string;
+  taskId: string;
+  agentId: string;
+  status: TaskStatus;
+  input: Record<string, any>;
+  output?: Record<string, any>;
+  error?: string;
+  logs: ExecutionLog[];
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+export interface ExecutionLog {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  message: string;
+  data?: Record<string, any>;
+}
+
+export interface FoxApproval {
+  id: string;
+  taskId: string;
+  type: ApprovalType;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  requestedBy: string;
+  requestedAt: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  decision?: string;
+  metadata: Record<string, any>;
+}
+
+export interface FoxActivity {
+  id: string;
+  agentId?: string;
+  taskId?: string;
+  executionId?: string;
+  type: 'agent_created' | 'agent_updated' | 'task_created' | 'task_assigned' | 'task_started' | 'task_completed' | 'task_failed' | 'task_retry' | 'approval_requested' | 'approval_decided' | 'review_started' | 'review_completed' | 'health_check' | 'self_healing' | 'staging_deploy' | 'custom';
+  message: string;
+  severity: 'info' | 'warn' | 'error' | 'critical';
+  metadata: Record<string, any>;
+  createdAt: string;
+}
+
+export interface FoxHealth {
+  id: string;
+  agentId: string;
+  status: HealthStatus;
+  lastCheckAt: string;
+  checks: HealthCheck[];
+  metrics: HealthMetrics;
+}
+
+export interface HealthCheck {
+  name: string;
+  status: 'pass' | 'fail' | 'warn';
+  message: string;
+  lastRunAt: string;
+}
+
+export interface HealthMetrics {
+  uptimePercent: number;
+  avgResponseTimeMs: number;
+  errorRatePercent: number;
+  successRatePercent: number;
+  lastExecutionDurationMs?: number;
+}
+
+export interface FoxLesson {
+  id: string;
+  title: string;
+  description: string;
+  category: 'workflow_engineering' | 'agent_operation' | 'deployment' | 'security' | 'performance' | 'custom';
+  severity: 'info' | 'warn' | 'critical';
+  sourceAgentId?: string;
+  sourceTaskId?: string;
+  sourceExecutionId?: string;
+  applicableAgents: string[];
+  preventionRule: string;
+  createdAt: string;
+  acknowledged: boolean;
+}
