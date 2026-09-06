@@ -1147,9 +1147,21 @@ const HydratedClientCRM: React.FC = () => {
                 <tr>
                   <td
                     colSpan={8}
-                    className="py-8 text-center text-xs text-slate-400"
+                    className="py-10 text-center"
                   >
-                    No CRM customers yet.
+                    <Users className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />
+                    <p className="mb-1 text-sm font-semibold text-slate-500 dark:text-slate-400">
+                      {app.language === "ar"
+                        ? "لا يوجد عملاء بعد"
+                        : "No CRM customers yet"}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {app.language === "ar"
+                        ? "العملاء يُضاف تلقائيًا عبر واتساب وتيليجرام أو اضغط 'إضافة'"
+                        : searchTerm || statusFilter !== "all"
+                        ? "Try a different search or filter."
+                        : "Customers are added automatically via WhatsApp & Telegram, or click 'Add Customer Lead'."}
+                    </p>
                   </td>
                 </tr>
               )}
