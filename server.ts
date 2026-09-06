@@ -613,6 +613,62 @@ async function sendSalesFollowUp(workspaceId: string, leadId: string, lead: any)
     return result.success ? { success: true, channel } : { success: false, error: result.error || "INSTAGRAM_SEND_FAILED" };
   }
 
+  if (channel === "whatsapp") {
+    const token = await getWorkspaceSecret(workspaceId, "whatsappAccessToken");
+    const phoneNumberId = String(workspace.whatsappPhoneNumberId || "").trim();
+    if (!token || !token.trim()) return { success: false, error: "WHATSAPP_CREDENTIALS_MISSING" };
+    if (!phoneNumberId) return { success: false, error: "WHATSAPP_PHONE_NUMBER_ID_MISSING" };
+    if (!recipient) return { success: false, error: "RECIPIENT_MISSING" };
+    try {
+      const waRes = await fetch(`https://graph.facebook.com/v18.0/${encodeURIComponent(phoneNumberId)}/messages?access_token=${encodeURIComponent(String(token).trim())}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: String(recipient).trim(),
+          type: "text",
+          text: { body: message },
+        }),
+      });
+      const waData: any = await waRes.json();
+      if (!waRes.ok || waData.error) {
+        const errCode = waData.error?.code || "WHATSAPP_SEND_FAILED";
+        return { success: false, error: errCode };
+      }
+      return { success: true, channel, externalMessageId: String(waData.messages?.[0]?.id || waData.message_id || "") };
+    } catch (e: any) {
+      return { success: false, error: "WHATSAPP_SEND_EXCEPTION" };
+    }
+  }
+
+  if (channel === "messenger" || channel === "facebook") {
+    const token = await getWorkspaceSecret(workspaceId, "facebookPageAccessToken");
+    const pageId = String(workspace.metaPageId || "").trim();
+    if (!token || !token.trim()) return { success: false, error: "MESSENGER_CREDENTIALS_MISSING" };
+    if (!pageId) return { success: false, error: "MESSENGER_PAGE_ID_MISSING" };
+    if (!recipient) return { success: false, error: "RECIPIENT_MISSING" };
+    try {
+      const msgRes = await fetch(`https://graph.facebook.com/v18.0/me/messages?access_token=${encodeURIComponent(String(token).trim())}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messaging_type: "UPDATE",
+          recipient: { id: String(recipient).trim() },
+          message: { text: message },
+        }),
+      });
+      const msgData: any = await msgRes.json();
+      if (!msgRes.ok || msgData.error) {
+        const errCode = msgData.error?.code || "MESSENGER_SEND_FAILED";
+        return { success: false, error: errCode };
+      }
+      return { success: true, channel, externalMessageId: String(msgData.message_id || "") };
+    } catch (e: any) {
+      return { success: false, error: "MESSENGER_SEND_EXCEPTION" };
+    }
+  }
+
   return { success: false, error: `CHANNEL_NOT_AUTOMATED:${channel || "unknown"}` };
 }
 
