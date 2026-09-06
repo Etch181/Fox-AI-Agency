@@ -320,7 +320,7 @@ export const ClientN8n: React.FC = () => {
             ) : n8nRealStatus?.status === "online" ? (
               <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-400">
                 <Radio className="h-4 w-4 animate-pulse" />
-                <span>n8n Status: ONLINE</span>
+                <span>{isAr ? "n8n متصل وجاهز" : "n8n ONLINE & READY"}</span>
               </div>
             ) : n8nRealStatus?.status === "disabled" ? (
               <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
