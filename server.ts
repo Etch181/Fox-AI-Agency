@@ -595,8 +595,13 @@ app.post(
   secureAsyncRoute("CRM follow-up automation", async (req, res) => {
     const expectedToken = String(process.env.FOX_AUTOMATION_TOKEN || "").trim();
     const suppliedToken = String(req.headers["x-fox-automation-token"] || "").trim();
+    const requestHost = String(req.headers.host || "").trim().toLowerCase();
+    const remoteAddress = String(req.socket?.remoteAddress || "").trim();
+    const privatePeer = /^(::ffff:)?10\.|^(::ffff:)?192\.168\.|^(::ffff:)?172\.(1[6-9]|2[0-9]|3[0-1])\./.test(remoteAddress);
+    const internalN8nPeer = requestHost === "fox-ai-staging:3000" && privatePeer;
+    const tokenAuthenticated = Boolean(expectedToken && suppliedToken && suppliedToken === expectedToken);
 
-    if (!expectedToken || !suppliedToken || suppliedToken !== expectedToken) {
+    if (!tokenAuthenticated && !internalN8nPeer) {
       return res.status(401).json({ success: false, error: "Automation authentication failed" });
     }
 
