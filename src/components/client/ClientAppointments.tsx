@@ -7,6 +7,7 @@ export const ClientAppointments: React.FC = () => {
   const {
     currentWorkspace,
     workspacesLoading,
+    language,
     appointments,
     appointmentsLoading,
     appointmentsError,
@@ -113,8 +114,16 @@ export const ClientAppointments: React.FC = () => {
 
               {!appointmentsLoading && !appointmentsError && workspaceApts.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
-                    No appointments yet.
+                  <td colSpan={6} className="py-10 text-center">
+                    <CalendarIcon className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />
+                    <p className="mb-1 text-sm font-semibold text-slate-500 dark:text-slate-400">
+                      {language === "ar" ? "لا توجد مواعيد بعد" : "No appointments yet"}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {language === "ar"
+                        ? "تُحجز تلقائيًا عبر واتساب وتيليجرام أو اضغط 'جدولة'."
+                        : "Appointments are booked via WhatsApp / Telegram or click 'Schedule New Appointment'."}
+                    </p>
                   </td>
                 </tr>
               )}
