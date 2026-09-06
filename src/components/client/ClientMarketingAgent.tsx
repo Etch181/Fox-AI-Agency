@@ -82,46 +82,7 @@ export const ClientMarketingAgent: React.FC = () => {
       if (fetched.length > 0) {
         setSavedPosts(fetched);
       } else {
-        // Default seed demo items
-        const defaultDemos: GeneratedSocialPost[] = [
-          {
-            id: "demo_1",
-            workspaceId: currentWorkspace.id,
-            platform: "facebook",
-            topic: isAr ? "نظام أتمتة المطاعم والطلب الآلي" : "Restaurant Automation Offer",
-            content: isAr
-              ? "🚀 هل تملك مطعماً أو كافيه وتستغرق وقتاً طويلاً في الرد على المنيو والطلبات؟\n\nقم بتمكين وكيل الذكاء الاصطناعي الذكي من Fox AI للرد الآلي، استقبال الطلبات، وحجز الطاولات مباشرة عبر واتساب وفيسبوك 🤖🍕\n\n👇 اكتب 'مهتم' في التعليقات وستصلك كافة التفاصيل ورابط التجربة المجانية فوراً بالخاص!\n\n#أتمتة_المطاعم #ذكاء_اصطناعي #FoxAI #تسويق_رقمي"
-              : "🚀 Do you own a restaurant or cafe and spend too much time handling menu questions?\n\nAutomate orders and reservations 24/7 with Fox AI Assistant! 🤖🍕\n\nComment 'Interested' below to receive a free trial link in your DMs!",
-            recommendedTime: isAr ? "اليوم - الساعة 7:30 مساءً" : "Today at 7:30 PM",
-            bestDays: isAr ? "الأحد، الثلاثاء، الخميس" : "Sun, Tue, Thu",
-            reason: isAr
-              ? "فترة الذروة المسائية عقب ساعات العمل لرواد الأعمال وأصحاب المشاريع والمطاعم."
-              : "Evening peak time after business hours for restaurant owners.",
-            engagementBoost: "+65% تفاعل",
-            suggestedVisualPrompt: "تصميم عصري جذاب لمطعم يظهر إشعارات طلبات آلي على هاتف ذكي",
-            imageUrl: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&auto=format&fit=crop&q=80",
-            targetAudience: isAr ? "مطاعم وكافيهات" : "Restaurants & Cafes"
-          },
-          {
-            id: "demo_2",
-            workspaceId: currentWorkspace.id,
-            platform: "instagram",
-            topic: isAr ? "حجز مواعيد العيادات الطبية تلقائياً" : "Clinic AI Booking Assistant",
-            content: isAr
-              ? "👨‍⚕️ تنظيم مواعيد عيادتك أسهل من أي وقت مضى مع بوت Fox AI.\nمتابعة المرضى، تأكيد الحجوزات، والرد على الاستفسارات بدقة متناهية 24/7.\n\nجرّب النظام مجاناً الآن! اترك تعليقاً بكلمة 'عيادة' أو أرسل لنا في الخاص 💬⚡\n\n#عيادات #حجز_مواعيد #ذكاء_اصطناعي #انستغرام"
-              : "👨‍⚕️ Streamline clinic appointments with Fox AI. Automatic patient follow-ups and instant booking confirmation 24/7.\n\nTry it free today! Leave a comment or send us a DM 💬⚡",
-            recommendedTime: isAr ? "اليوم - الساعة 6:00 مساءً" : "Today at 6:00 PM",
-            bestDays: isAr ? "الإثنين، الأربعاء، الجمعة" : "Mon, Wed, Fri",
-            reason: isAr
-              ? "ذروة تصفح إنستغرام في الفترة المسائية للأطباء والمرضى."
-              : "Evening browsing peak for doctors & patients.",
-            engagementBoost: "+75% وصول",
-            suggestedVisualPrompt: "طبيب مبتسم يحمل جهازا لوحيا يظهر مواعيد محجوزة آليا",
-            imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
-            targetAudience: isAr ? "عيادات وأطباء" : "Clinics & Doctors"
-          }
-        ];
-        setSavedPosts(defaultDemos);
+        setSavedPosts([]);
       }
     } catch (e) {
       console.error("Error fetching saved generated posts:", e);
@@ -182,8 +143,9 @@ export const ClientMarketingAgent: React.FC = () => {
             createdAt: serverTimestamp()
           });
           setSavedPosts((prev) => [{ ...newResult, id: docRef.id }, ...prev]);
-        } catch {
-          setSavedPosts((prev) => [{ ...newResult, id: "temp_" + Date.now() }, ...prev]);
+        } catch (e) {
+          console.error("Error saving generated post to Firestore:", e);
+          setSavedPosts((prev) => [{ ...newResult, id: "local_" + Date.now() }, ...prev]);
         }
       }
     } catch (err: any) {
@@ -209,9 +171,7 @@ export const ClientMarketingAgent: React.FC = () => {
   const handleDeletePost = async (id?: string) => {
     if (!id) return;
     try {
-      if (!id.startsWith("demo_") && !id.startsWith("temp_")) {
-        await deleteDoc(doc(db, "marketing_generated_posts", id));
-      }
+      await deleteDoc(doc(db, "marketing_generated_posts", id));
       setSavedPosts((prev) => prev.filter((p) => p.id !== id));
     } catch (e) {
       console.error("Error deleting post:", e);
@@ -616,8 +576,33 @@ export const ClientMarketingAgent: React.FC = () => {
             <span className="text-xs text-slate-500">{savedPosts.length} {isAr ? "منشور محفوظ" : "saved posts"}</span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {savedPosts.map((post) => (
+          {savedPosts.length === 0 && !loadingHistory ? (
+            <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl p-10 flex flex-col items-center justify-center text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-orange-50 dark:bg-orange-950/50 flex items-center justify-center text-orange-600">
+                <Calendar className="w-7 h-7" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {isAr ? "لا توجد منشورات محفوظة بعد" : "No saved posts yet"}
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
+                  {isAr
+                    ? "سيظهر هنا كل منشور تولّده فعلياً من تبويب \"توليد منشور جديد\" بعد حفظه في Firestore. لا توجد بيانات وهمية أو محفوظات مسبقة."
+                    : "Every post you actually generate from the \"Create New Post\" tab will appear here once persisted to Firestore. No demo or fake content is shown."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab("generator")}
+                className="mt-2 px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{isAr ? "ابدأ بتوليد أول منشور" : "Generate your first post"}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {savedPosts.map((post) => (
               <div
                 key={post.id}
                 className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 space-y-3.5 shadow-xs relative hover:border-orange-500/50 transition-all"
@@ -674,8 +659,9 @@ export const ClientMarketingAgent: React.FC = () => {
                   <span className="font-bold text-emerald-600 dark:text-emerald-400">{post.engagementBoost}</span>
                 </div>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
