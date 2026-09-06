@@ -352,6 +352,61 @@ export const ClientN8n: React.FC = () => {
         </div>
       </div>
 
+      {/* Automation Activity Summary — derived from real webhook execution logs */}
+      {logs.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            {
+              labelAr: "إجمالي التنفيذات",
+              labelEn: "Total Executions",
+              value: logs.length,
+              color: "text-white",
+              bg: "bg-slate-800/80 border-slate-700",
+              icon: <Zap className="h-4 w-4 text-amber-400" />,
+            },
+            {
+              labelAr: "ناجحة",
+              labelEn: "Succeeded",
+              value: logs.filter(l => l.status === "success").length,
+              color: "text-emerald-400",
+              bg: "bg-emerald-950/40 border-emerald-800/40",
+              icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
+            },
+            {
+              labelAr: "فاشلة",
+              labelEn: "Failed",
+              value: logs.filter(l => l.status === "failed" || l.status === "error").length,
+              color: "text-rose-400",
+              bg: "bg-rose-950/40 border-rose-800/40",
+              icon: <AlertCircle className="h-4 w-4 text-rose-400" />,
+            },
+            {
+              labelAr: "آخر تنفيذ",
+              labelEn: "Last Execution",
+              value: logs[0]?.timestamp ?? "—",
+              color: "text-slate-300",
+              bg: "bg-slate-800/80 border-slate-700",
+              icon: <Clock className="h-4 w-4 text-slate-400" />,
+            },
+          ].map((stat, idx) => (
+            <div
+              key={idx}
+              className={`rounded-2xl p-4 border space-y-1 ${stat.bg}`}
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                {stat.icon}
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                  {isAr ? stat.labelAr : stat.labelEn}
+                </span>
+              </div>
+              <div className={`text-xl font-black ${stat.color}`}>
+                {stat.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Main Testing Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
