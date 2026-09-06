@@ -984,6 +984,17 @@ const HydratedClientCRM: React.FC = () => {
     addToast("Exported CRM records to CSV!", "success");
   };
 
+  const handleExportJSON = () => {
+    const data = JSON.stringify(leads, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${currentWorkspace.name}_CRM_Leads.json`;
+    a.click();
+    addToast("Exported CRM records to JSON!", "success");
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1018,6 +1029,13 @@ const HydratedClientCRM: React.FC = () => {
               {isSyncingSheets ? 'Connecting...' : 'Connect & Sync with Google Sheets CRM'}
             </button>
           )}
+          <button
+            onClick={handleExportJSON}
+            className="flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-xs font-bold text-violet-600 dark:text-violet-400 hover:bg-violet-500/20 transition"
+          >
+            <Download className="h-4 w-4 text-violet-500" />
+            <span>Export JSON</span>
+          </button>
           <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center gap-1.5 rounded-xl bg-orange-500 px-4 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:bg-orange-600 transition"
