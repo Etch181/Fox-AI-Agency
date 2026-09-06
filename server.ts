@@ -587,6 +587,79 @@ app.post(
   })
 );
 
+
+// FOX Sales Follow-up Automation — n8n scheduled internal runner.
+// Idempotent: only transitions follow-ups that are actually due and not already marked due.
+app.post(
+  "/api/internal/automation/crm-followups/run",
+  secureAsyncRoute("CRM follow-up automation", async (req, res) => {
+    const expectedToken = String(process.env.FOX_AUTOMATION_TOKEN || "").trim();
+    const suppliedToken = String(req.headers["x-fox-automation-token"] || "").trim();
+
+    if (!expectedToken || !suppliedToken || suppliedToken !== expectedToken) {
+      return res.status(401).json({ success: false, error: "Automation authentication failed" });
+    }
+
+    const nowIso = new Date().toISOString();
+    const workspaces = await adminDb.collection("workspaces").get();
+    let scanned = 0;
+    let markedDue = 0;
+
+    for (const workspaceDoc of workspaces.docs) {
+      const workspaceId = workspaceDoc.id;
+      const leadsSnapshot = await adminDb
+        .collection("workspaces")
+        .doc(workspaceId)
+        .collection("crmLeads")
+        .where("followUpDate", "<=", nowIso)
+        .limit(100)
+        .get();
+
+      for (const leadDoc of leadsSnapshot.docs) {
+        scanned += 1;
+        const lead: any = leadDoc.data() || {};
+        if (["Won", "Lost"].includes(String(lead.status || ""))) continue;
+        if (String(lead.followUpStatus || "") === "due") continue;
+
+        const update = {
+          followUpStatus: "due",
+          followUpDueAt: nowIso,
+          automationLastCheckedAt: nowIso,
+          updatedAt: nowIso,
+        };
+        await leadDoc.ref.set(update, { merge: true });
+        markedDue += 1;
+
+        try {
+          await crmEventService.createEvent({
+            workspaceId,
+            leadId: leadDoc.id,
+            type: "system",
+            title: "FOX Sales Follow-up Due",
+            description: String(lead.aiFollowUpMessage || lead.nextAction || "Follow-up is due for this lead.").slice(0, 1200),
+            source: "n8n_sales_followup_automation",
+            metadata: {
+              followUpDate: lead.followUpDate || null,
+              aiLeadScore: lead.aiLeadScore ?? null,
+              aiTemperature: lead.aiTemperature || null,
+            },
+          });
+        } catch (eventError: any) {
+          console.warn("[FOX Follow-up Automation] Event log skipped:", eventError?.message || eventError);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      automation: "fox-sales-followup",
+      scanned,
+      markedDue,
+      checkedAt: nowIso,
+    });
+  })
+);
+
 // Health Check
 app.get("/api/health", (_req, res) => {
   res.json({
