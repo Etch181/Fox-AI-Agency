@@ -91,6 +91,7 @@ import { ClientFoxAdvisor } from "./components/client/ClientFoxAdvisor";
 import { ClientAIEngagement } from "./components/client/ClientAIEngagement";
 import { ClientMarketingAgent } from "./components/client/ClientMarketingAgent";
 import { ClientIntegrations } from "./components/client/ClientIntegrations";
+import { AgentRegistryPage } from "./components/client/AgentRegistryPage";
 
 /**
  * WorkspaceGuard ensures strict tenant data isolation.

@@ -62,7 +62,7 @@ type CustomerTimelineItem = {
 };
 
 export const ClientCRM: React.FC = () => {
-  const { currentWorkspace, workspacesLoading } = useApp();
+  const { currentWorkspace, workspacesLoading, language } = useApp();
 
   if (!currentWorkspace) {
     return (
@@ -110,6 +110,7 @@ const HydratedClientCRM: React.FC = () => {
   const [status, setStatus] = useState<CustomerLead["status"]>("Lead");
   const [notes, setNotes] = useState("");
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
+  const [analyzingLeadId, setAnalyzingLeadId] = useState<string | null>(null);
 
   const [customerTimeline, setCustomerTimeline] =
     useState<CustomerTimelineItem[]>([]);
@@ -136,6 +137,16 @@ const HydratedClientCRM: React.FC = () => {
     const matchesStatus = statusFilter === "all" || l.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const hotLeads = leads.filter((l) => Number((l as any).aiLeadScore || 0) >= 75).length;
+  const followUpsDue = leads.filter((l) => {
+    const due = (l as any).followUpDate ? new Date((l as any).followUpDate).getTime() : 0;
+    return due > 0 && due <= Date.now() && !["Customer", "Won", "Lost", "VIP"].includes(String(l.status));
+  }).length;
+  const wonLeads = leads.filter((l) => ["Customer", "Won", "VIP"].includes(String(l.status))).length;
+  const averageScore = leads.length
+    ? Math.round(leads.reduce((sum, l) => sum + Number((l as any).aiLeadScore || 0), 0) / leads.length)
+    : 0;
 
   const handleConnectSheets = async () => {
     try {
@@ -274,6 +285,43 @@ const HydratedClientCRM: React.FC = () => {
           "Failed to update lead status",
         "error"
       );
+    }
+  };
+
+  const handleAnalyzeLead = async (lead: CustomerLead) => {
+    try {
+      setAnalyzingLeadId(lead.id);
+      const response = await authenticatedFetch(
+        `/api/workspaces/${encodeURIComponent(currentWorkspace.id)}/crm/leads/${encodeURIComponent(lead.id)}/analyze`,
+        { method: "POST" }
+      );
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "AI lead analysis failed");
+      }
+      setSelectedLead((current) =>
+        current?.id === lead.id ? ({ ...current, ...result.analysis } as CustomerLead) : current
+      );
+      addToast("FOX AI analyzed the lead and prepared the next action.", "success");
+    } catch (error: any) {
+      addToast(error?.message || "AI lead analysis failed", "error");
+    } finally {
+      setAnalyzingLeadId(null);
+    }
+  };
+
+  const handleSaveLeadPlan = async () => {
+    if (!selectedLead) return;
+    try {
+      const leadRef = doc(db, "workspaces", currentWorkspace.id, "crmLeads", selectedLead.id);
+      await updateDoc(leadRef, {
+        nextAction: (selectedLead as any).nextAction || "",
+        followUpDate: (selectedLead as any).followUpDate || null,
+        updatedAt: new Date().toISOString(),
+      });
+      addToast("Lead follow-up plan saved.", "success");
+    } catch (error: any) {
+      addToast(error?.message || "Failed to save lead plan", "error");
     }
   };
 
@@ -961,6 +1009,30 @@ const HydratedClientCRM: React.FC = () => {
         </div>
       </div>
 
+      {/* CRM Executive Snapshot */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Total Leads", value: leads.length, icon: Users, tone: "text-blue-500", bg: "bg-blue-500/10" },
+          { label: "Hot Leads", value: hotLeads, icon: Target, tone: "text-rose-500", bg: "bg-rose-500/10" },
+          { label: "Follow-ups Due", value: followUpsDue, icon: Clock, tone: "text-amber-500", bg: "bg-amber-500/10" },
+          { label: "Won / Customers", value: wonLeads, icon: BadgeCheck, tone: "text-emerald-500", bg: "bg-emerald-500/10" },
+        ].map((card) => (
+          <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{card.label}</p>
+                <p className="mt-1 text-2xl font-black text-slate-900 dark:text-white">{card.value}</p>
+              </div>
+              <div className={`rounded-xl p-2.5 ${card.bg}`}><card.icon className={`h-5 w-5 ${card.tone}`} /></div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between rounded-2xl border border-purple-500/15 bg-purple-500/5 px-4 py-3 text-xs">
+        <span className="font-bold text-slate-700 dark:text-slate-200">FOX AI Sales Intelligence</span>
+        <span className="font-black text-purple-500">Average lead score: {averageScore}/100</span>
+      </div>
+
       {/* Search & Filter */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-800">
@@ -984,7 +1056,12 @@ const HydratedClientCRM: React.FC = () => {
             <option value="all">All Lead Stages</option>
             <option value="Lead">Lead</option>
             <option value="Prospect">Prospect</option>
+            <option value="Qualified">Qualified</option>
+            <option value="Contacted">Contacted</option>
+            <option value="Proposal">Proposal</option>
             <option value="Customer">Customer</option>
+            <option value="Won">Won</option>
+            <option value="Lost">Lost</option>
             <option value="VIP">VIP</option>
           </select>
         </div>
@@ -1000,6 +1077,8 @@ const HydratedClientCRM: React.FC = () => {
                 <th className="py-3 px-4">Contact Info</th>
                 <th className="py-3 px-4">Channel</th>
                 <th className="py-3 px-4">CRM Stage</th>
+                <th className="py-3 px-4">AI Score</th>
+                <th className="py-3 px-4">Follow-up</th>
                 <th className="py-3 px-4">Last Interaction</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
@@ -1008,7 +1087,7 @@ const HydratedClientCRM: React.FC = () => {
               {loadingLeads && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={8}
                     className="py-8 text-center text-xs text-slate-400"
                   >
                     Loading CRM customers...
@@ -1019,7 +1098,7 @@ const HydratedClientCRM: React.FC = () => {
               {!loadingLeads && crmSubscriptionError && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={8}
                     className="py-8 text-center text-xs font-semibold text-rose-500"
                   >
                     CRM data could not be loaded. Please retry after checking your connection.
@@ -1030,7 +1109,7 @@ const HydratedClientCRM: React.FC = () => {
               {!loadingLeads && !crmSubscriptionError && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={8}
                     className="py-8 text-center text-xs text-slate-400"
                   >
                     No CRM customers yet.
@@ -1072,6 +1151,16 @@ const HydratedClientCRM: React.FC = () => {
                       <option value="Customer">Customer</option>
                       <option value="VIP">VIP</option>
                     </select>
+                  </td>
+
+                  <td className="py-3.5 px-4">
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number((lead as any).aiLeadScore || 0) >= 75 ? "bg-rose-500/10 text-rose-500" : Number((lead as any).aiLeadScore || 0) >= 45 ? "bg-amber-500/10 text-amber-500" : "bg-slate-500/10 text-slate-500"}`}>
+                      {(lead as any).aiLeadScore != null ? `${(lead as any).aiLeadScore}/100` : "Not scored"}
+                    </span>
+                  </td>
+
+                  <td className="py-3.5 px-4 text-[11px] text-slate-500 dark:text-slate-400">
+                    {(lead as any).followUpDate ? new Date((lead as any).followUpDate).toLocaleString() : "—"}
                   </td>
 
                   <td className="py-3.5 px-4 text-slate-500 dark:text-slate-400 font-mono text-[11px]">
@@ -1197,6 +1286,23 @@ const HydratedClientCRM: React.FC = () => {
                 </div>
               </div>
 
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAnalyzeLead(selectedLead)}
+                  disabled={analyzingLeadId === selectedLead.id}
+                  className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-[11px] font-black text-white shadow-sm transition hover:bg-purple-700 disabled:opacity-50"
+                >
+                  <Brain className="h-4 w-4" />
+                  {analyzingLeadId === selectedLead.id ? "Analyzing..." : "Analyze Lead with FOX AI"}
+                </button>
+                {(selectedLead as any).aiLeadScore != null && (
+                  <span className="rounded-full bg-white px-3 py-2 text-[10px] font-black text-purple-600 shadow-sm dark:bg-slate-900">
+                    Score {(selectedLead as any).aiLeadScore}/100 • {(selectedLead as any).aiTemperature || "warm"}
+                  </span>
+                )}
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2">
 
                 <div>
@@ -1231,6 +1337,42 @@ const HydratedClientCRM: React.FC = () => {
                     "No customer message captured yet."}
                 </div>
               </div>
+            </div>
+
+            {(selectedLead as any).aiSummary && (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-purple-500/15 bg-white p-4 dark:bg-slate-900">
+                  <p className="text-[10px] font-bold uppercase text-slate-400">AI Summary</p>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-700 dark:text-slate-200">{(selectedLead as any).aiSummary}</p>
+                  <p className="mt-3 text-[10px] font-bold text-purple-500">Recommended stage: {(selectedLead as any).aiRecommendedStage || "—"}</p>
+                </div>
+                <div className="rounded-2xl border border-orange-500/15 bg-white p-4 dark:bg-slate-900">
+                  <p className="text-[10px] font-bold uppercase text-slate-400">Suggested Follow-up Message</p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-700 dark:text-slate-200">{(selectedLead as any).aiFollowUpMessage}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+              <div className="mb-3 flex items-center gap-2">
+                <CalendarCheck className="h-4 w-4 text-orange-500" />
+                <p className="text-xs font-black text-slate-900 dark:text-white">Next Action & Follow-up</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_220px]">
+                <input
+                  value={(selectedLead as any).nextAction || ""}
+                  onChange={(e) => setSelectedLead({ ...selectedLead, nextAction: e.target.value } as CustomerLead)}
+                  placeholder="Next action for this lead"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+                <input
+                  type="datetime-local"
+                  value={(selectedLead as any).followUpDate ? String((selectedLead as any).followUpDate).slice(0, 16) : ""}
+                  onChange={(e) => setSelectedLead({ ...selectedLead, followUpDate: e.target.value ? new Date(e.target.value).toISOString() : undefined } as CustomerLead)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+              </div>
+              <button type="button" onClick={handleSaveLeadPlan} className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black text-white dark:bg-white dark:text-slate-900">Save Follow-up Plan</button>
             </div>
 
             {/* Conversion */}

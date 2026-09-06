@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Bot, Settings, ShieldCheck, Zap, Clock, CheckCircle2, AlertTriangle, Activity, TrendingUp, Users, Brain } from "lucide-react";
+import { Bot, Settings, ShieldCheck, Zap, Clock, CheckCircle2, AlertTriangle, Activity, TrendingUp, Users, Brain, Target } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 
 export const AgentControlCenter: React.FC = () => {

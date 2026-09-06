@@ -465,6 +465,128 @@ app.post("/api/generate-ai-post", async (req, res) => {
   }
 });
 
+// FOX CRM AI Lead Intelligence
+app.post(
+  "/api/workspaces/:workspaceId/crm/leads/:leadId/analyze",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("CRM AI lead analysis", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+    const leadId = String(req.params.leadId || "").trim();
+    const authWorkspaceId = String(req.foxAuth?.workspaceId || "").trim();
+    const isSuperAdmin = req.foxAuth?.role === "super_admin";
+
+    if (!workspaceId || !leadId) {
+      return res.status(400).json({ success: false, error: "workspaceId and leadId are required" });
+    }
+    if (!isSuperAdmin && authWorkspaceId !== workspaceId) {
+      return res.status(403).json({ success: false, error: "Workspace access denied" });
+    }
+
+    const lead: any = await workspaceCrmService.getLead(workspaceId, leadId);
+    if (!lead) {
+      return res.status(404).json({ success: false, error: "CRM lead not found" });
+    }
+
+    const tags = Array.isArray(lead.tags) ? lead.tags.map(String) : [];
+    const intent = String(lead.lastIntent || "general").toLowerCase();
+    const lastMessage = String(lead.lastMessage || "");
+    const status = String(lead.status || "Lead");
+    let score = 25;
+    if (["pricing", "purchase", "booking"].includes(intent)) score += 30;
+    if (tags.some((t: string) => /purchase|pricing|booking|customer/i.test(t))) score += 20;
+    if (["Prospect", "Qualified", "Contacted", "Proposal"].includes(status)) score += 15;
+    if (["Customer", "Won", "VIP"].includes(status)) score = Math.max(score, 90);
+    if (lead.phone) score += 5;
+    if (lead.email) score += 5;
+    score = Math.max(0, Math.min(100, score));
+
+    const fallback: any = {
+      score,
+      temperature: score >= 75 ? "hot" : score >= 45 ? "warm" : "cold",
+      summary: lastMessage
+        ? `Lead intent is ${intent}. Latest message: ${lastMessage.slice(0, 180)}`
+        : `Lead is currently at ${status} stage with ${intent} intent.`,
+      nextAction: score >= 75
+        ? "Contact the lead now and move toward proposal or booking."
+        : score >= 45
+          ? "Follow up today with a tailored value proposition and one clear CTA."
+          : "Nurture the lead and ask one qualification question before selling.",
+      followUpMessage: `Hi ${lead.name || "there"}, thanks for your interest. I can help you with the best next step for your request. Would you like me to send the most suitable option now?`,
+      recommendedStage: score >= 85 ? "Proposal" : score >= 65 ? "Qualified" : score >= 45 ? "Contacted" : "Lead",
+      reason: "Calculated from CRM stage, detected intent, available contact data and recent interaction signals.",
+      followUpInHours: score >= 75 ? 1 : score >= 45 ? 8 : 24,
+    };
+
+    let analysis = fallback;
+    const gemini = getGeminiClient();
+    if (gemini) {
+      try {
+        const prompt = `You are FOX AI Sales Intelligence. Analyze this CRM lead and return JSON only.\n\nLead: ${JSON.stringify({
+          name: lead.name,
+          status,
+          channel: lead.channel,
+          tags,
+          lastIntent: intent,
+          lastMessage,
+          notes: lead.notes,
+          lastInteraction: lead.lastInteraction,
+          totalSpentEGP: lead.totalSpentEGP,
+        })}\n\nReturn exactly: {"score":0-100,"temperature":"hot|warm|cold","summary":"...","nextAction":"...","followUpMessage":"...","recommendedStage":"Lead|Prospect|Qualified|Contacted|Proposal|Customer|Won|Lost|VIP","reason":"...","followUpInHours":1-168}. Keep followUpMessage natural and useful.`;
+        const aiResponse = await gemini.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+          config: { responseMimeType: "application/json" },
+        });
+        if (aiResponse.text) {
+          const parsed = JSON.parse(aiResponse.text);
+          analysis = { ...fallback, ...parsed };
+        }
+      } catch (error: any) {
+        console.warn("[FOX CRM AI] Provider unavailable, using deterministic analysis:", error?.message || error);
+      }
+    }
+
+    const allowedStages = new Set(["Lead", "Prospect", "Qualified", "Contacted", "Proposal", "Customer", "Won", "Lost", "VIP"]);
+    const normalizedScore = Math.max(0, Math.min(100, Number(analysis.score) || fallback.score));
+    const normalizedTemperature = ["hot", "warm", "cold"].includes(String(analysis.temperature))
+      ? String(analysis.temperature)
+      : fallback.temperature;
+    const recommendedStage = allowedStages.has(String(analysis.recommendedStage))
+      ? String(analysis.recommendedStage)
+      : fallback.recommendedStage;
+    const followUpInHours = Math.max(1, Math.min(168, Number(analysis.followUpInHours) || fallback.followUpInHours));
+    const analyzedAt = new Date().toISOString();
+    const followUpDate = new Date(Date.now() + followUpInHours * 60 * 60 * 1000).toISOString();
+
+    const stored = {
+      aiLeadScore: normalizedScore,
+      aiTemperature: normalizedTemperature,
+      aiSummary: String(analysis.summary || fallback.summary).slice(0, 1200),
+      aiNextAction: String(analysis.nextAction || fallback.nextAction).slice(0, 800),
+      aiFollowUpMessage: String(analysis.followUpMessage || fallback.followUpMessage).slice(0, 1600),
+      aiRecommendedStage: recommendedStage,
+      aiAnalysisReason: String(analysis.reason || fallback.reason).slice(0, 1000),
+      aiAnalyzedAt: analyzedAt,
+      nextAction: String(analysis.nextAction || fallback.nextAction).slice(0, 800),
+      followUpDate,
+      updatedAt: analyzedAt,
+    };
+
+    await adminDb.collection("workspaces").doc(workspaceId).collection("crmLeads").doc(leadId).set(stored, { merge: true });
+    await crmEventService.createEvent({
+      workspaceId,
+      leadId,
+      type: "system",
+      title: "FOX AI Lead Analysis",
+      description: `Lead scored ${normalizedScore}/100 (${normalizedTemperature}). Next: ${stored.aiNextAction}`,
+      source: "fox_ai_sales_intelligence",
+      metadata: { score: normalizedScore, temperature: normalizedTemperature, recommendedStage, followUpDate },
+    });
+
+    return res.json({ success: true, analysis: stored });
+  })
+);
+
 // Health Check
 app.get("/api/health", (_req, res) => {
   res.json({

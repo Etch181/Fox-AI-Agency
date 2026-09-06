@@ -40,15 +40,17 @@ export const ALL_VIEWS = [
   "client_fox_advisor",
   "client_ai_analytics",
   "client_marketing_agent",
+  "agent_registry",
 ] as const;
 
 export type ViewTab = (typeof ALL_VIEWS)[number];
 
 const CLIENT_OWNER_VIEWS = ALL_VIEWS.filter(
   (view): view is ViewTab =>
-    view.startsWith("client_") &&
-    view !== "client_ai_analytics" &&
-    view !== "client_marketing_agent",
+    view === "agent_registry" ||
+    (view.startsWith("client_") &&
+      view !== "client_ai_analytics" &&
+      view !== "client_marketing_agent"),
 );
 
 const STAFF_VIEWS = [
