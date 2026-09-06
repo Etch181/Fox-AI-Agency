@@ -111,6 +111,7 @@ const HydratedClientCRM: React.FC = () => {
   const [notes, setNotes] = useState("");
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
   const [analyzingLeadId, setAnalyzingLeadId] = useState<string | null>(null);
+  const [sendingFollowUpId, setSendingFollowUpId] = useState<string | null>(null);
 
   const [customerTimeline, setCustomerTimeline] =
     useState<CustomerTimelineItem[]>([]);
@@ -317,11 +318,29 @@ const HydratedClientCRM: React.FC = () => {
       await updateDoc(leadRef, {
         nextAction: (selectedLead as any).nextAction || "",
         followUpDate: (selectedLead as any).followUpDate || null,
+        autoFollowUpEnabled: Boolean((selectedLead as any).autoFollowUpEnabled),
+        followUpStatus: (selectedLead as any).followUpDate ? "scheduled" : null,
         updatedAt: new Date().toISOString(),
       });
       addToast("Lead follow-up plan saved.", "success");
     } catch (error: any) {
       addToast(error?.message || "Failed to save lead plan", "error");
+    }
+  };
+
+  const handleSendFollowUpNow = async () => {
+    if (!selectedLead) return;
+    try {
+      setSendingFollowUpId(selectedLead.id);
+      const response = await authenticatedFetch(`/api/workspaces/${encodeURIComponent(currentWorkspace.id)}/crm/leads/${encodeURIComponent(selectedLead.id)}/follow-up/send`, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || "Follow-up send failed");
+      setSelectedLead({ ...selectedLead, followUpStatus: "sent", followUpSentAt: result.sentAt } as CustomerLead);
+      addToast("FOX Sales Agent sent the follow-up successfully.", "success");
+    } catch (error: any) {
+      addToast(error?.message || "Follow-up send failed", "error");
+    } finally {
+      setSendingFollowUpId(null);
     }
   };
 
@@ -1372,7 +1391,17 @@ const HydratedClientCRM: React.FC = () => {
                   className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                 />
               </div>
-              <button type="button" onClick={handleSaveLeadPlan} className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black text-white dark:bg-white dark:text-slate-900">Save Follow-up Plan</button>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button type="button" onClick={handleSaveLeadPlan} className="rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black text-white dark:bg-white dark:text-slate-900">Save Follow-up Plan</button>
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                  <input type="checkbox" checked={Boolean((selectedLead as any).autoFollowUpEnabled)} onChange={(e) => setSelectedLead({ ...selectedLead, autoFollowUpEnabled: e.target.checked } as CustomerLead)} />
+                  Auto Follow-up via n8n
+                </label>
+                <button type="button" onClick={handleSendFollowUpNow} disabled={sendingFollowUpId === selectedLead.id || !(selectedLead as any).aiFollowUpMessage} className="rounded-xl bg-emerald-600 px-4 py-2 text-[11px] font-black text-white disabled:opacity-40">
+                  {sendingFollowUpId === selectedLead.id ? "Sending..." : "Send Follow-up Now"}
+                </button>
+                <span className="text-[10px] font-bold text-slate-400">Status: {(selectedLead as any).followUpStatus || "not scheduled"}</span>
+              </div>
             </div>
 
             {/* Conversion */}

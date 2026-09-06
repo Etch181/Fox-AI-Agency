@@ -589,7 +589,55 @@ app.post(
 
 
 // FOX Sales Follow-up Automation — n8n scheduled internal runner.
-// Idempotent: only transitions follow-ups that are actually due and not already marked due.
+async function sendSalesFollowUp(workspaceId: string, leadId: string, lead: any) {
+  const workspaceSnap = await adminDb.collection("workspaces").doc(workspaceId).get();
+  if (!workspaceSnap.exists) return { success: false, error: "WORKSPACE_NOT_FOUND" };
+  const workspace: any = { id: workspaceSnap.id, ...workspaceSnap.data() };
+  const message = String(lead.aiFollowUpMessage || lead.nextAction || "").trim();
+  if (!message) return { success: false, error: "FOLLOWUP_MESSAGE_MISSING" };
+  const channel = String(lead.channel || "").toLowerCase();
+  const recipient = String(lead.externalCustomerId || "").trim() || (channel === "telegram" && leadId.startsWith("telegram_") ? leadId.slice(9) : "");
+  if (!recipient) return { success: false, error: "RECIPIENT_MISSING" };
+
+  if (channel === "telegram") {
+    const token = await getWorkspaceTelegramRuntimeToken(workspace);
+    if (!token) return { success: false, error: "TELEGRAM_CREDENTIALS_MISSING" };
+    const result: any = await callWorkspaceTelegramApi(token, "sendMessage", { chat_id: recipient, text: message });
+    if (!result?.ok) return { success: false, error: "TELEGRAM_SEND_FAILED" };
+    return { success: true, channel, externalMessageId: result?.result?.message_id ? String(result.result.message_id) : undefined };
+  }
+
+  if (channel === "instagram") {
+    const { sendInstagramDirectMessage } = await import("./src/services/instagramService.ts");
+    const result = await sendInstagramDirectMessage(workspaceId, recipient, message);
+    return result.success ? { success: true, channel } : { success: false, error: result.error || "INSTAGRAM_SEND_FAILED" };
+  }
+
+  return { success: false, error: `CHANNEL_NOT_AUTOMATED:${channel || "unknown"}` };
+}
+
+app.post(
+  "/api/workspaces/:workspaceId/crm/leads/:leadId/follow-up/send",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("CRM manual follow-up send", async (req, res) => {
+    const workspaceId = String(req.params.workspaceId || "").trim();
+    const leadId = String(req.params.leadId || "").trim();
+    const authWorkspaceId = String(req.foxAuth?.workspaceId || "").trim();
+    const isSuperAdmin = req.foxAuth?.role === "super_admin";
+    if (!isSuperAdmin && authWorkspaceId !== workspaceId) return res.status(403).json({ success: false, error: "Workspace access denied" });
+    const leadRef = adminDb.collection("workspaces").doc(workspaceId).collection("crmLeads").doc(leadId);
+    const snap = await leadRef.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: "CRM lead not found" });
+    const lead: any = snap.data() || {};
+    const result = await sendSalesFollowUp(workspaceId, leadId, lead);
+    const nowIso = new Date().toISOString();
+    if (!result.success) return res.status(400).json(result);
+    await leadRef.set({ followUpStatus: "sent", followUpSentAt: nowIso, followUpExternalMessageId: result.externalMessageId || null, lastInteraction: nowIso, updatedAt: nowIso }, { merge: true });
+    await crmEventService.createEvent({ workspaceId, leadId, type: "system", title: "FOX Sales Follow-up Sent", description: String(lead.aiFollowUpMessage || lead.nextAction || "").slice(0, 1200), source: "fox_sales_agent", metadata: { channel: result.channel, externalMessageId: result.externalMessageId || null, mode: "manual" } });
+    return res.json({ success: true, ...result, sentAt: nowIso });
+  })
+);
+
 app.post(
   "/api/internal/automation/crm-followups/run",
   secureAsyncRoute("CRM follow-up automation", async (req, res) => {
@@ -600,68 +648,39 @@ app.post(
     const privatePeer = /^(::ffff:)?10\.|^(::ffff:)?192\.168\.|^(::ffff:)?172\.(1[6-9]|2[0-9]|3[0-1])\./.test(remoteAddress);
     const internalN8nPeer = requestHost === "fox-ai-staging:3000" && privatePeer;
     const tokenAuthenticated = Boolean(expectedToken && suppliedToken && suppliedToken === expectedToken);
-
-    if (!tokenAuthenticated && !internalN8nPeer) {
-      return res.status(401).json({ success: false, error: "Automation authentication failed" });
-    }
+    if (!tokenAuthenticated && !internalN8nPeer) return res.status(401).json({ success: false, error: "Automation authentication failed" });
 
     const nowIso = new Date().toISOString();
     const workspaces = await adminDb.collection("workspaces").get();
-    let scanned = 0;
-    let markedDue = 0;
-
+    let scanned = 0, markedDue = 0, sent = 0, failed = 0, skippedDisabled = 0;
     for (const workspaceDoc of workspaces.docs) {
       const workspaceId = workspaceDoc.id;
-      const leadsSnapshot = await adminDb
-        .collection("workspaces")
-        .doc(workspaceId)
-        .collection("crmLeads")
-        .where("followUpDate", "<=", nowIso)
-        .limit(100)
-        .get();
-
+      const leadsSnapshot = await adminDb.collection("workspaces").doc(workspaceId).collection("crmLeads").where("followUpDate", "<=", nowIso).limit(100).get();
       for (const leadDoc of leadsSnapshot.docs) {
         scanned += 1;
         const lead: any = leadDoc.data() || {};
         if (["Won", "Lost"].includes(String(lead.status || ""))) continue;
-        if (String(lead.followUpStatus || "") === "due") continue;
-
-        const update = {
-          followUpStatus: "due",
-          followUpDueAt: nowIso,
-          automationLastCheckedAt: nowIso,
-          updatedAt: nowIso,
-        };
-        await leadDoc.ref.set(update, { merge: true });
-        markedDue += 1;
-
-        try {
-          await crmEventService.createEvent({
-            workspaceId,
-            leadId: leadDoc.id,
-            type: "system",
-            title: "FOX Sales Follow-up Due",
-            description: String(lead.aiFollowUpMessage || lead.nextAction || "Follow-up is due for this lead.").slice(0, 1200),
-            source: "n8n_sales_followup_automation",
-            metadata: {
-              followUpDate: lead.followUpDate || null,
-              aiLeadScore: lead.aiLeadScore ?? null,
-              aiTemperature: lead.aiTemperature || null,
-            },
-          });
-        } catch (eventError: any) {
-          console.warn("[FOX Follow-up Automation] Event log skipped:", eventError?.message || eventError);
+        if (String(lead.followUpStatus || "") === "sent") continue;
+        if (lead.autoFollowUpEnabled !== true) {
+          skippedDisabled += 1;
+          if (String(lead.followUpStatus || "") !== "due") {
+            await leadDoc.ref.set({ followUpStatus: "due", followUpDueAt: nowIso, automationLastCheckedAt: nowIso, updatedAt: nowIso }, { merge: true });
+            markedDue += 1;
+          }
+          continue;
+        }
+        const result = await sendSalesFollowUp(workspaceId, leadDoc.id, lead);
+        if (result.success) {
+          await leadDoc.ref.set({ followUpStatus: "sent", followUpSentAt: nowIso, followUpExternalMessageId: result.externalMessageId || null, automationLastCheckedAt: nowIso, lastInteraction: nowIso, updatedAt: nowIso }, { merge: true });
+          sent += 1;
+          await crmEventService.createEvent({ workspaceId, leadId: leadDoc.id, type: "system", title: "FOX Sales Agent Follow-up Sent", description: String(lead.aiFollowUpMessage || lead.nextAction || "").slice(0, 1200), source: "n8n_sales_followup_automation", metadata: { channel: result.channel, externalMessageId: result.externalMessageId || null, followUpDate: lead.followUpDate || null, aiLeadScore: lead.aiLeadScore ?? null, aiTemperature: lead.aiTemperature || null } });
+        } else {
+          failed += 1;
+          await leadDoc.ref.set({ followUpStatus: "retry_wait", followUpLastError: result.error || "SEND_FAILED", automationLastCheckedAt: nowIso, updatedAt: nowIso }, { merge: true });
         }
       }
     }
-
-    return res.json({
-      success: true,
-      automation: "fox-sales-followup",
-      scanned,
-      markedDue,
-      checkedAt: nowIso,
-    });
+    return res.json({ success: true, automation: "fox-sales-followup", scanned, markedDue, sent, failed, skippedDisabled, checkedAt: nowIso });
   })
 );
 
