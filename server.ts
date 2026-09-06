@@ -8875,6 +8875,73 @@ app.post(
   })
 );
 
+// ============================================================
+// n8n Status — real integration status for Automation Center
+// ============================================================
+app.get(
+  "/api/n8n/status",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("n8n status", async (req, res) => {
+    const { workspaceId } = (req as any).user || {};
+
+    const enabled = INTEGRATION_FLAGS.n8n;
+    const webhookUrlConfigured = Boolean(
+      process.env.N8N_WEBHOOK_URL?.trim()
+    );
+    const webhookSecretConfigured = Boolean(
+      process.env.N8N_WEBHOOK_SECRET?.trim()
+    );
+    const configured = webhookUrlConfigured && webhookSecretConfigured;
+
+    let planAllows = false;
+    if (workspaceId) {
+      const trusted = resolveTrustedWorkspace(String(workspaceId));
+      if (trusted) {
+        const access = requireWorkspaceFeature(trusted, "n8n");
+        planAllows = access.allowed;
+      }
+    }
+
+    if (!enabled) {
+      return res.status(200).json({
+        status: "disabled",
+        enabled: false,
+        configured: false,
+        planAllows: false,
+        message: "n8n integration is disabled on this server",
+      });
+    }
+
+    if (!configured) {
+      return res.status(200).json({
+        status: "not_configured",
+        enabled: true,
+        configured: false,
+        planAllows: false,
+        message: "n8n webhook URL or secret is not configured on this server",
+      });
+    }
+
+    if (!planAllows) {
+      return res.status(200).json({
+        status: "plan_restricted",
+        enabled: true,
+        configured: true,
+        planAllows: false,
+        message: "n8n is available on Enterprise plan only for this workspace",
+      });
+    }
+
+    return res.status(200).json({
+      status: "online",
+      enabled: true,
+      configured: true,
+      planAllows: true,
+      message: "n8n integration is online and ready",
+    });
+  })
+);
+
 
 
 // ============================================================

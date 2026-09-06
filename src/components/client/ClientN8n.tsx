@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
 import {
   Zap,
@@ -18,6 +18,9 @@ import {
   Radio,
   RefreshCw,
   ExternalLink,
+  ShieldOff,
+  Settings,
+  Crown,
 } from "lucide-react";
 
 interface WebhookLogEntry {
@@ -41,6 +44,35 @@ export const ClientN8n: React.FC = () => {
   // Custom Webhook Endpoint URL
   const [webhookUrl, setWebhookUrl] = useState("/api/n8n/webhook");
   const [selectedPreset, setSelectedPreset] = useState("crm_lead_created");
+
+  // Real n8n integration status (replaces hardcoded ONLINE)
+  const [n8nRealStatus, setN8nRealStatus] = useState<{
+    status: string;
+    message: string;
+  } | null>(null);
+  const [n8nStatusLoading, setN8nStatusLoading] = useState(true);
+
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    let cancelled = false;
+    setN8nStatusLoading(true);
+    fetch("/api/n8n/status", { headers: { "Content-Type": "application/json" } })
+      .then((r) => r.json().catch(() => null))
+      .then((data: any) => {
+        if (cancelled) return;
+        setN8nRealStatus({
+          status: data?.status || "unknown",
+          message: data?.message || "",
+        });
+        setN8nStatusLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setN8nRealStatus({ status: "unknown", message: "Could not reach server" });
+        setN8nStatusLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [currentWorkspace?.id]);
 
   // Pre-configured JSON sample payloads based on workspace
   const getPresetPayload = (preset: string) => {
@@ -280,12 +312,41 @@ export const ClientN8n: React.FC = () => {
 
         <div className="flex items-center gap-3 relative z-10 shrink-0">
           <div className="rounded-2xl bg-slate-800/80 p-3.5 border border-slate-700/80 text-right dir-ltr">
-            <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-400">
-              <Radio className="h-4 w-4 animate-pulse" />
-              <span>n8n Status: ONLINE</span>
-            </div>
+            {n8nStatusLoading ? (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                <span>{isAr ? "جاري التحقق..." : "Checking status..."}</span>
+              </div>
+            ) : n8nRealStatus?.status === "online" ? (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-400">
+                <Radio className="h-4 w-4 animate-pulse" />
+                <span>n8n Status: ONLINE</span>
+              </div>
+            ) : n8nRealStatus?.status === "disabled" ? (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
+                <ShieldOff className="h-4 w-4" />
+                <span>{isAr ? "n8n معطّل" : "n8n DISABLED"}</span>
+              </div>
+            ) : n8nRealStatus?.status === "not_configured" ? (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-amber-400">
+                <Settings className="h-4 w-4" />
+                <span>{isAr ? "n8n غير مهيأ" : "n8n NOT CONFIGURED"}</span>
+              </div>
+            ) : n8nRealStatus?.status === "plan_restricted" ? (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-rose-400">
+                <Crown className="h-4 w-4" />
+                <span>{isAr ? "يتطلب Enterprise" : "n8n REQUIRES ENTERPRISE"}</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
+                <AlertCircle className="h-4 w-4" />
+                <span>{isAr ? "حالة غير معروفة" : "n8n UNKNOWN"}</span>
+              </div>
+            )}
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-              Workspace: {currentWorkspace.id}
+              {n8nRealStatus?.message
+                ? (isAr ? "• " : "• ") + n8nRealStatus.message
+                : `Workspace: ${currentWorkspace.id}`}
             </div>
           </div>
         </div>
