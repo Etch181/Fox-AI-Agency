@@ -10,6 +10,16 @@ type AgentCard = {
 };
 
 const AGENTS: AgentCard[] = [
+  { name: "FOX-CLINIC-APPOINTMENTS", roleAr: "حجز وإدارة مواعيد العيادات", roleEn: "Clinic appointments", icon: Activity },
+  { name: "FOX-COMPLAINTS-SUGGESTIONS", roleAr: "الشكاوى والاقتراحات", roleEn: "Complaints & suggestions", icon: Headphones },
+  { name: "FOX-PHARMACY-SALES", roleAr: "مبيعات الصيدليات", roleEn: "Pharmacy sales", icon: ShoppingCart },
+  { name: "FOX-RETAIL-SALES", roleAr: "مبيعات المتاجر", roleEn: "Retail sales", icon: ShoppingCart },
+  { name: "FOX-RESTAURANT-OPERATIONS", roleAr: "تشغيل المطاعم والحجوزات", roleEn: "Restaurant operations", icon: Activity },
+  { name: "FOX-COURSE-CENTER", roleAr: "مراكز التدريب والكورسات", roleEn: "Course center", icon: BookOpen },
+  { name: "FOX-CUSTOMER-SUPPORT", roleAr: "خدمة العملاء والدعم", roleEn: "Customer support", icon: Headphones },
+  { name: "FOX-MARKETING", roleAr: "التسويق وإدارة السوشيال", roleEn: "Marketing & social", icon: Megaphone },
+  { name: "FOX-SALES", roleAr: "المبيعات والمتابعة", roleEn: "Sales & follow-up", icon: ShoppingCart },
+  { name: "FOX-KNOWLEDGE", roleAr: "إدارة قاعدة المعرفة", roleEn: "Knowledge management", icon: BookOpen },
   { name: "FOX-PRODUCT-DEVELOPER", roleAr: "تطوير المنتج والكود", roleEn: "Product development", icon: Wrench },
   { name: "FOX-QA-TECHNICAL-REVIEWER", roleAr: "مراجعة الجودة والتقنية", roleEn: "QA & technical review", icon: ShieldCheck },
   { name: "FOX-STAGING-RELEASE", roleAr: "البناء والنشر على Staging", roleEn: "Staging release", icon: Activity },
