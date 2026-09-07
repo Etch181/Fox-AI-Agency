@@ -8774,7 +8774,7 @@ app.post(
           const registered = await getAgentByRole(roleMap[agent] || "custom");
           if (registered) {
             await incrementAgentFailure(registered.id);
-            await logActivity({ agentId: registered.id, type: "agent_execution_failed", message: `Agent failed for workspace ${trustedWorkspace.id}`, severity: "error", metadata: { workspaceId: trustedWorkspace.id, agent, channel } });
+            await logActivity({ agentId: registered.id, type: "task_failed", message: `Agent failed for workspace ${trustedWorkspace.id}`, severity: "error", metadata: { workspaceId: trustedWorkspace.id, agent, channel } });
           }
         } catch (activityError) { console.warn("[FOX Agent Activity] failure logging skipped", activityError); }
         return res.status(503).json({
@@ -8790,7 +8790,7 @@ app.post(
         const registered = await getAgentByRole(roleMap[agent] || "custom");
         if (registered) {
           await incrementAgentSuccess(registered.id);
-          await logActivity({ agentId: registered.id, type: "agent_execution_completed", message: `Agent completed work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, source: result.source } });
+          await logActivity({ agentId: registered.id, type: "task_completed", message: `Agent completed work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, source: result.source } });
         }
       } catch (activityError) { console.warn("[FOX Agent Activity] success logging skipped", activityError); }
 
