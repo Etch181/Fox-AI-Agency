@@ -8690,6 +8690,111 @@ app.post(
 
 
 
+// n8n Specialized Agent Dispatch
+// n8n is the orchestration layer; FOX remains the tenant/security/AI boundary.
+app.post(
+  "/api/automation/agent",
+  secureAsyncRoute("n8n specialized agent", async (req: any, res) => {
+    const suppliedSecret = String(
+      req.headers["x-fox-n8n-secret"] || ""
+    ).trim();
+    const expectedSecret = String(
+      process.env.N8N_WEBHOOK_SECRET || ""
+    ).trim();
+
+    if (!expectedSecret || suppliedSecret !== expectedSecret) {
+      return res.status(401).json({
+        success: false,
+        code: "N8N_AGENT_UNAUTHORIZED",
+        error: "Invalid n8n agent secret",
+      });
+    }
+
+    if (!INTEGRATION_FLAGS.n8n) {
+      return res.status(503).json({
+        success: false,
+        code: "N8N_DISABLED",
+        error: "n8n integration is disabled",
+      });
+    }
+
+    const body = req.body || {};
+    const workspaceId = String(body.workspaceId || "").trim();
+    const message = String(body.message || body.customerMessage || "").trim();
+    const agent = String(body.agent || "support").trim().toLowerCase();
+    const channel = String(body.channel || "n8n").trim().toLowerCase();
+    const sessionId = String(body.sessionId || `n8n:${workspaceId}:${Date.now()}`).trim();
+
+    if (!workspaceId || !message) {
+      return res.status(400).json({
+        success: false,
+        code: "AGENT_INPUT_REQUIRED",
+        error: "workspaceId and message are required",
+      });
+    }
+
+    const trustedWorkspace = resolveTrustedWorkspace(workspaceId);
+    if (!trustedWorkspace) {
+      return res.status(404).json({
+        success: false,
+        code: "WORKSPACE_NOT_FOUND",
+        error: "Workspace not found",
+      });
+    }
+
+    const agentPrompts: Record<string, string> = {
+      appointments: "You are the FOX Appointment Agent. Handle appointment booking, availability, rescheduling and cancellation. Never invent a slot; use the tenant's configured doctors, services and availability. Collect only the information needed to complete the booking and escalate when required.",
+      complaints: "You are the FOX Complaints & Suggestions Agent. Classify the customer's issue, acknowledge it empathetically, capture the facts, propose the next valid step, and escalate urgent or unresolved cases. Never fabricate a resolution or policy.",
+      pharmacy_sales: "You are the FOX Pharmacy Sales Agent. Help customers find products from the tenant medicine catalog, check availability and alternatives, answer catalog-grounded questions, and route prescription-required items appropriately. Never invent medicine availability, price or medical instructions.",
+      retail_sales: "You are the FOX Retail Sales Agent. Qualify the customer, recommend only catalog-grounded products, check availability/stock when available, capture order intent and hand off payment or fulfillment steps without inventing them.",
+      restaurant: "You are the FOX Restaurant Agent. Handle menu questions, table/reservation requests and order intent using only the tenant menu and configured policies. Never invent availability or prices.",
+      course_center: "You are the FOX Course Center Agent. Handle course discovery, enrollment questions, schedules, pricing and lead capture using only tenant course data. Never invent seats, dates or fees.",
+      marketing: "You are the FOX Marketing Agent. Produce strategy, content briefs, channel-specific copy, campaign tasks and optimization recommendations from tenant context. Do not claim a post was published or metrics were achieved unless a real integration result is supplied.",
+      support: "You are the FOX Customer Support Agent. Resolve customer questions using tenant knowledge and escalate when confidence or authority is insufficient.",
+    };
+
+    const selectedPrompt = agentPrompts[agent] || agentPrompts.support;
+
+    try {
+      const result = await aiAgentService.generateChatResponse({
+        workspace: await withWorkspaceRuntimeIntegrations(trustedWorkspace),
+        message,
+        channel,
+        sessionId,
+        chatHistory: Array.isArray(body.chatHistory) ? body.chatHistory : [],
+        overrideConfig: {
+          customPrompt: selectedPrompt,
+        },
+      });
+
+      if (!result || result.source === "error_fallback") {
+        return res.status(503).json({
+          success: false,
+          code: "AI_PROVIDER_UNAVAILABLE",
+          error: "No real AI provider response was available",
+        });
+      }
+
+      return res.json({
+        success: true,
+        agent,
+        workspaceId: trustedWorkspace.id,
+        response: result.response || result.aiResponse,
+        source: result.source,
+        detectedLanguage: result.detectedLanguage,
+        suggestedActions: result.suggestedActions || [],
+      });
+    } catch (error: any) {
+      console.error("[FOX n8n Agent Dispatch Error]", error?.message || error);
+      return res.status(503).json({
+        success: false,
+        code: "AI_AGENT_FAILED",
+        error: "Specialized agent execution failed",
+      });
+    }
+  }),
+);
+
 // n8n Webhook Proxy Endpoint
 app.post(
   "/api/n8n/webhook",
