@@ -1116,6 +1116,7 @@ const HydratedClientCRM: React.FC = () => {
                 <th className="py-3 px-4">CRM Stage</th>
                 <th className="py-3 px-4">AI Score</th>
                 <th className="py-3 px-4">Follow-up</th>
+                <th className="py-3 px-4">Automation Status</th>
                 <th className="py-3 px-4">Last Interaction</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
@@ -1210,6 +1211,18 @@ const HydratedClientCRM: React.FC = () => {
 
                   <td className="py-3.5 px-4 text-[11px] text-slate-500 dark:text-slate-400">
                     {(lead as any).followUpDate ? new Date((lead as any).followUpDate).toLocaleString() : "—"}
+                  </td>
+
+                  <td className="py-3.5 px-4">
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black ${
+                      (lead as any).followUpStatus === "sent" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" :
+                      (lead as any).followUpStatus === "due" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" :
+                      (lead as any).followUpStatus === "failed" || (lead as any).followUpStatus === "retry_wait" ? "bg-rose-500/10 text-rose-600 dark:text-rose-400" :
+                      (lead as any).followUpStatus === "scheduled" ? "bg-blue-500/10 text-blue-600 dark:text-blue-400" :
+                      "bg-slate-500/10 text-slate-500"
+                    }`}>
+                      {(lead as any).followUpStatus ? String((lead as any).followUpStatus).replace("_", " ") : "not scheduled"}
+                    </span>
                   </td>
 
                   <td className="py-3.5 px-4 text-slate-500 dark:text-slate-400 font-mono text-[11px]">
