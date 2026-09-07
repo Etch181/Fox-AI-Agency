@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
 import { PackageRecommendation } from "./PackageRecommendation";
 import { ClientAnalyticsDashboard } from "./ClientAnalyticsDashboard";
@@ -63,6 +63,21 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
     addToast,
     language,
   } = useApp();
+
+  const [marketingStatus, setMarketingStatus] = useState<any>(null);
+  const [marketingLoading, setMarketingLoading] = useState(false);
+
+  useEffect(() => {
+    if (!currentWorkspace) return;
+    let cancelled = false;
+    setMarketingLoading(true);
+    fetch("/api/marketing/status", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (!cancelled) setMarketingStatus(data); })
+      .catch(() => { if (!cancelled) setMarketingStatus(null); })
+      .finally(() => { if (!cancelled) setMarketingLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentWorkspace?.id]);
 
   const isAr = language === "ar";
 
@@ -1329,6 +1344,30 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
             </div>
           );
         })()}
+        {/* Marketing Automation Activity — real /api/marketing/status, no fake data */}
+        {marketingStatus && (
+          <div className="rounded-xl bg-purple-500/10 border border-purple-500/20 px-3.5 py-2.5 flex flex-col gap-1">
+            <div className="flex items-center gap-1">
+              <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+              <span className="text-[10px] font-bold text-purple-400">{isAr ? "التسويق الآلي" : "Marketing Automation"}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+              <span className="text-[11px] font-bold text-slate-300">{marketingStatus.strategySet ? (isAr ? "الإستراتيجية: مُعَدّة" : "Strategy: Set") : (isAr ? "الإستراتيجية: غير مُعَدّة" : "Strategy: Not set")}</span>
+              {marketingStatus.approvalMode && marketingStatus.approvalMode !== 'not_configured' && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${marketingStatus.approvalMode === 'AUTO_PUBLISH' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}`}>{marketingStatus.approvalMode === 'AUTO_PUBLISH' ? (isAr ? "نشر تلقائي" : "Auto-Publish") : (isAr ? "موافقة يدوية" : "Manual Approval")}</span>
+              )}
+              {(marketingStatus.platforms?.facebook?.connected || marketingStatus.platforms?.instagram?.connected) && (
+                <>
+                  {marketingStatus.platforms.facebook?.connected && <span className="text-[10px] font-bold text-blue-400">FB</span>}
+                  {marketingStatus.platforms.instagram?.connected && <span className="text-[10px] font-bold text-pink-400">IG</span>}
+                </>
+              )}
+              {marketingStatus.recentPosts && marketingStatus.recentPosts.total > 0 && (
+                <span className="text-[11px] font-black text-white ml-auto">{marketingStatus.recentPosts.published}/{marketingStatus.recentPosts.total}<span className="font-medium text-slate-400"> {isAr ? "منشور" : "post(s)"}</span></span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Advanced Analytics & Insights */}
