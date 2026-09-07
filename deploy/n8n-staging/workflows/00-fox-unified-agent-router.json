@@ -1,0 +1,237 @@
+{
+  "name": "FOX Unified Agent Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9f333e98-e795-47f4-88c3-070a6f5b5df7",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.headers?.['x-fox-n8n-secret'] || '' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "85f28f49-43a5-410c-8459-f8ae2419f785",
+      "name": "Verify FOX n8n Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "agent",
+              "value": "={{ $json.body?.agent || 'support' }}",
+              "type": "string"
+            },
+            {
+              "name": "industry",
+              "value": "={{ $json.body?.industry || 'all' }}",
+              "type": "string"
+            },
+            {
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.body?.message || $json.body?.customerMessage || '' }}",
+              "type": "string"
+            },
+            {
+              "name": "channel",
+              "value": "={{ $json.body?.channel || 'n8n' }}",
+              "type": "string"
+            },
+            {
+              "name": "sessionId",
+              "value": "={{ $json.body?.sessionId || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7e2bdf9b-ed3e-4728-9c84-b7686ed1150b",
+      "name": "Normalize Agent Event",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL + \"/api/automation/agent\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: $json.agent, message: $json.message, channel: $json.channel, sessionId: $json.sessionId }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "83b16e2a-a0ff-4dd5-a641-0e6db67e14d5",
+      "name": "FOX Specialized Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "74faf7af-2cbc-4a8e-8fc6-a2d5084a3c54",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success:false, code:'N8N_SECRET_REJECTED' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "829d4a19-f373-478e-bf2d-bb5aecc08164",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        480,
+        160
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX n8n Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX n8n Secret": {
+      "main": [
+        [
+          {
+            "node": "Normalize Agent Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Agent Event": {
+      "main": [
+        [
+          {
+            "node": "FOX Specialized Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Specialized Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    {
+      "name": "FOX"
+    },
+    {
+      "name": "n8n"
+    },
+    {
+      "name": "router"
+    }
+  ],
+  "id": "foxUnifiedAgentRouter01"
+}

@@ -460,13 +460,14 @@ const AppContent: React.FC = () => {
           </WorkspaceGuard>
         );
       case "client_n8n":
-        return (
-          <WorkspaceGuard>
-            <PlanFeatureGuard feature="n8n">
-              <ClientN8n />
-            </PlanFeatureGuard>
-          </WorkspaceGuard>
-        );
+        if (currentUser.role !== "super_admin") {
+          return (
+            <WorkspaceGuard>
+              <ClientDashboard onNavigate={navigateTo} />
+            </WorkspaceGuard>
+          );
+        }
+        return <AdminN8nWorkflows />;
       case "client_staff":
         return (
           <WorkspaceGuard>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
 import { PackageRecommendation } from "./PackageRecommendation";
+import { FoxAgentLivePanel } from "./FoxAgentLivePanel";
 import { ClientAnalyticsDashboard } from "./ClientAnalyticsDashboard";
 import {
   HelpCircle,
@@ -876,13 +877,6 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
 
         <div className="flex flex-wrap items-center gap-2.5 relative z-10">
           <button
-            onClick={() => onNavigate("client_n8n")}
-            className="flex items-center gap-2 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 px-3.5 py-2.5 text-xs font-bold hover:bg-amber-500/30 transition"
-          >
-            <Zap className="h-4 w-4 text-amber-400" />
-            {isAr ? "اختبار Webhook n8n" : "Test n8n Webhook"}
-          </button>
-          <button
             onClick={() => onNavigate("client_live_simulator")}
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-orange-500/20 hover:from-orange-600 hover:to-amber-700 transition"
           >
@@ -898,6 +892,8 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
           </button>
         </div>
       </div>
+
+      <FoxAgentLivePanel />
 
       {/* SECTION 1: Active Subscription Plan Features Display (عرض مميزات الخطة المشترك بها) */}
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
@@ -1291,14 +1287,6 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
               </p>
             </div>
           </div>
-          <button
-            onClick={() => onNavigate("client_n8n")}
-            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-[11px] font-black text-slate-900 shadow-lg shadow-amber-500/20 hover:bg-amber-400 transition"
-          >
-            <Activity className="h-3.5 w-3.5" />
-            {isAr ? "فتح مركز n8n" : "Open n8n Hub"}
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
         </div>
         <div className="grid grid-cols-3 gap-3">
           {[
