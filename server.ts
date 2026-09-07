@@ -9056,6 +9056,58 @@ app.get(
 
 
 // ============================================================
+// Workspace Agent Activity — read-only tenant view.
+// No workflow definitions, URLs, credentials, or execution controls.
+// ============================================================
+app.get(
+  "/api/agents/activity",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("workspace agent activity", async (req: any, res) => {
+    const requestedWorkspaceId = String(req.query?.workspaceId || "").trim();
+    if (!requestedWorkspaceId) return res.status(400).json({ error: "workspaceId is required" });
+
+    const trustedWorkspace = requireAuthenticatedWorkspace(req, res, requestedWorkspaceId);
+    if (!trustedWorkspace) return;
+
+    const role = String(req.user?.role || "");
+    if (role !== "super_admin" && role !== "client_owner") {
+      return res.status(403).json({ error: "Agent activity is available to workspace owners only" });
+    }
+
+    const { listAgents, listActivities, listTasks } = await import("./src/services/foxAgentControlPlane");
+    const [agents, activities, tasks] = await Promise.all([
+      listAgents(),
+      listActivities({ limit: 200 }),
+      listTasks({ limit: 200 }),
+    ]);
+
+    const belongsToWorkspace = (item: any) =>
+      String(item?.workspaceId || item?.metadata?.workspaceId || item?.payload?.workspaceId || "") === requestedWorkspaceId;
+
+    const workspaceTasks = tasks.filter(belongsToWorkspace);
+    const taskIds = new Set(workspaceTasks.map((t: any) => String(t.id)));
+    const workspaceActivities = activities.filter((a: any) =>
+      belongsToWorkspace(a) || (a.taskId && taskIds.has(String(a.taskId)))
+    );
+
+    const visibleAgents = agents.map((agent: any) => ({
+      id: agent.id, name: agent.name, role: agent.role, status: agent.status,
+      description: agent.description, lastExecutionAt: agent.lastExecutionAt,
+      lastExecutionStatus: agent.lastExecutionStatus, successCount: agent.successCount,
+      failureCount: agent.failureCount,
+    }));
+
+    return res.json({
+      success: true, workspaceId: requestedWorkspaceId, agents: visibleAgents,
+      activities: workspaceActivities.slice(0, 50).map((a: any) => ({
+        id: a.id, agentId: a.agentId, taskId: a.taskId, type: a.type,
+        message: a.message, severity: a.severity, createdAt: a.createdAt,
+      })),
+    });
+  })
+);
+
+// ============================================================
 // Marketing Automation Status — real workspace-scoped status for Marketing FOX
 // ============================================================
 app.get(

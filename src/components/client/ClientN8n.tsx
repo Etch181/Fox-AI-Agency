@@ -1,743 +1,81 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import {
-  Zap,
-  CheckCircle2,
-  Play,
-  FileSpreadsheet,
-  Workflow,
-  Send,
-  Terminal,
-  Clock,
-  Check,
-  Copy,
-  Trash2,
-  Code2,
-  AlertCircle,
-  Globe,
-  Radio,
-  RefreshCw,
-  ExternalLink,
-  ShieldOff,
-  Settings,
-  Crown,
-} from "lucide-react";
+import { Bot, Activity, Clock3, ShieldCheck, RefreshCw, LockKeyhole } from "lucide-react";
 
-interface WebhookLogEntry {
-  id: string;
-  timestamp: string;
-  event: string;
-  targetUrl: string;
-  statusCode: number;
-  durationMs: number;
-  requestPayload: any;
-  responsePayload: any;
-  status: "success" | "error" | "failed";
-}
+type Agent = { id: string; name: string; role: string; status: string; description?: string; lastExecutionAt?: string; lastExecutionStatus?: string; successCount?: number; failureCount?: number };
+type ActivityItem = { id: string; agentId?: string; type: string; message: string; severity?: string; createdAt: string };
 
-
-const EVENT_LABEL_MAP: Record<string, { ar: string; en: string }> = {
-  crm_lead_created: { ar: "عميل جديد / CRM", en: "New Lead / CRM" },
-  appointment_scheduled: { ar: "حجز موعد", en: "Appointment Scheduled" },
-  customer_complaint_escalated: { ar: "تصعيد شكوى", en: "Complaint Escalated" },
-  payment_received: { ar: "دفع Instapay", en: "Payment Received" },
-  custom_payload: { ar: "حمولة مخصصة", en: "Custom Payload" },
+const ROLE_LABELS: Record<string, { ar: string; en: string }> = {
+  "product-developer": { ar: "تطوير المنتج", en: "Product Development" },
+  "sales": { ar: "المبيعات", en: "Sales" },
+  "customer-support": { ar: "خدمة العملاء", en: "Customer Support" },
+  "marketing": { ar: "التسويق", en: "Marketing" },
+  "monitoring": { ar: "المراقبة", en: "Monitoring" },
+  "knowledge": { ar: "إدارة المعرفة", en: "Knowledge" },
 };
 
-function getEventLabel(event: string, isAr: boolean) {
-  return EVENT_LABEL_MAP[event]?.[isAr ? "ar" : "en"] ?? (isAr ? event : event);
-}
-
-function getChannel(event: string) {
-  if (event.includes("crm") || event.includes("lead")) return "CRM";
-  if (event.includes("appointment")) return "SCHEDULE";
-  if (event.includes("complaint")) return "SUPPORT";
-  if (event.includes("payment")) return "PAYMENTS";
-  return "n8n";
-}
-
-function safeErrorSummary(resp: any): string | null {
-  if (!resp || typeof resp !== "object") return null;
-  const msg = resp.error || resp.message || resp.errorMessage || resp.details;
-  if (typeof msg === "string" && msg.length > 0 && msg.length < 120) return msg;
-  return null;
-}
-
 export const ClientN8n: React.FC = () => {
-  const { currentWorkspace, addToast, language } = useApp();
+  const { currentWorkspace, currentUser, language, addToast } = useApp();
   const isAr = language === "ar";
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  if (!currentWorkspace) return null;
-
-  // Custom Webhook Endpoint URL
-  const [webhookUrl, setWebhookUrl] = useState("/api/n8n/webhook");
-  const [selectedPreset, setSelectedPreset] = useState("crm_lead_created");
-
-  // Real n8n integration status (replaces hardcoded ONLINE)
-  const [n8nRealStatus, setN8nRealStatus] = useState<{
-    status: string;
-    message: string;
-  } | null>(null);
-  const [n8nStatusLoading, setN8nStatusLoading] = useState(true);
-
-  useEffect(() => {
+  const load = async () => {
     if (!currentWorkspace?.id) return;
-    let cancelled = false;
-    setN8nStatusLoading(true);
-    fetch("/api/n8n/status", { headers: { "Content-Type": "application/json" } })
-      .then((r) => r.json().catch(() => null))
-      .then((data: any) => {
-        if (cancelled) return;
-        setN8nRealStatus({
-          status: data?.status || "unknown",
-          message: data?.message || "",
-        });
-        setN8nStatusLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setN8nRealStatus({ status: "unknown", message: "Could not reach server" });
-        setN8nStatusLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [currentWorkspace?.id]);
-
-  // Pre-configured JSON sample payloads based on workspace
-  const getPresetPayload = (preset: string) => {
-    switch (preset) {
-      case "crm_lead_created":
-        return JSON.stringify(
-          {
-            event: "crm_lead_created",
-            workspaceId: currentWorkspace.id,
-            workspaceName: currentWorkspace.name,
-            lead: {
-              id: `lead_${Math.random().toString(36).substring(2, 7)}`,
-              name: isAr ? "أحمد المحمدي" : "Ahmed El-Mohamady",
-              phone: "+20 100 123 4567",
-              email: "ahmed.customer@gmail.com",
-              channel: "WhatsApp",
-              status: "New",
-              notes: "Interested in Fox Business Plan for Clinic AI Assistant",
-            },
-            timestamp: new Date().toISOString(),
-          },
-          null,
-          2
-        );
-      case "appointment_scheduled":
-        return JSON.stringify(
-          {
-            event: "appointment_scheduled",
-            workspaceId: currentWorkspace.id,
-            workspaceName: currentWorkspace.name,
-            appointment: {
-              id: `apt_${Math.random().toString(36).substring(2, 7)}`,
-              customerName: isAr ? "د. سارة فؤاد" : "Dr. Sara Fouad",
-              phone: "+20 122 888 9999",
-              doctorName: isAr ? "د. سامح نادر" : "Dr. Sameh Nader",
-              specialty: isAr ? "طب الأسنان" : "Dentistry",
-              date: new Date().toISOString().split("T")[0],
-              time: "06:30 PM",
-              consultationFeeEGP: 450,
-            },
-            timestamp: new Date().toISOString(),
-          },
-          null,
-          2
-        );
-      case "customer_complaint_escalated":
-        return JSON.stringify(
-          {
-            event: "customer_complaint_escalated",
-            workspaceId: currentWorkspace.id,
-            workspaceName: currentWorkspace.name,
-            complaint: {
-              id: `cmp_${Math.random().toString(36).substring(2, 7)}`,
-              customerName: isAr ? "م. محمود طاهر" : "Eng. Mahmoud Taher",
-              phone: "+20 111 222 3333",
-              complaintText: "Delay in order delivery and response on WhatsApp",
-              severity: "High",
-              escalatedToAdmin: true,
-            },
-            timestamp: new Date().toISOString(),
-          },
-          null,
-          2
-        );
-      case "payment_received":
-        return JSON.stringify(
-          {
-            event: "payment_received",
-            workspaceId: currentWorkspace.id,
-            workspaceName: currentWorkspace.name,
-            payment: {
-              txRef: "INSTAPAY-TX-88291",
-              amountEGP: 1000,
-              planId: "business",
-              paymentMethod: "Instapay Egypt",
-              status: "approved",
-            },
-            timestamp: new Date().toISOString(),
-          },
-          null,
-          2
-        );
-      default:
-        return JSON.stringify(
-          {
-            event: "custom_payload",
-            workspaceId: currentWorkspace.id,
-            data: { customField: "sample_value", active: true },
-            timestamp: new Date().toISOString(),
-          },
-          null,
-          2
-        );
-    }
-  };
-
-  const [payloadJson, setPayloadJson] = useState<string>(() => getPresetPayload("crm_lead_created"));
-  const [jsonError, setJsonError] = useState<string | null>(null);
-  const [isSending, setIsSending] = useState(false);
-  const [logs, setLogs] = useState<WebhookLogEntry[]>([]);
-  const [copiedLogId, setCopiedLogId] = useState<string | null>(null);
-
-  const handlePresetChange = (preset: string) => {
-    setSelectedPreset(preset);
-    const newJson = getPresetPayload(preset);
-    setPayloadJson(newJson);
-    setJsonError(null);
-  };
-
-  const handleJsonChange = (val: string) => {
-    setPayloadJson(val);
+    setLoading(true);
     try {
-      JSON.parse(val);
-      setJsonError(null);
-    } catch (err: any) {
-      setJsonError(err.message || "Invalid JSON syntax");
-    }
+      const res = await fetch(`/api/agents/activity?workspaceId=${encodeURIComponent(currentWorkspace.id)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to load agent activity");
+      setAgents(Array.isArray(data.agents) ? data.agents : []);
+      setActivities(Array.isArray(data.activities) ? data.activities : []);
+    } catch (error: any) {
+      addToast(isAr ? "تعذر تحميل حالة الـ Agents" : "Could not load agent status", "error");
+    } finally { setLoading(false); }
   };
 
-  const handleFormatJson = () => {
-    try {
-      const parsed = JSON.parse(payloadJson);
-      setPayloadJson(JSON.stringify(parsed, null, 2));
-      setJsonError(null);
-      addToast(isAr ? "تم تنسيق الـ JSON بنجاح" : "JSON formatted successfully", "info");
-    } catch {
-      addToast(isAr ? "تعذر تنسيق كود JSON غير صالح" : "Cannot format invalid JSON", "error");
-    }
-  };
+  useEffect(() => { load(); }, [currentWorkspace?.id]);
 
-  const handleSendWebhook = async () => {
-    let parsedPayload: any;
-    try {
-      parsedPayload = JSON.parse(payloadJson);
-    } catch {
-      setJsonError("Invalid JSON payload");
-      addToast(isAr ? "يرجى تصحيح أخطاء الـ JSON قبل الإرسال" : "Fix JSON errors before sending", "error");
-      return;
-    }
-
-    if (n8nRealStatus?.status !== "online") {
-      addToast(
-        isAr
-          ? `لا يمكن تنفيذ الاختبار: n8n ${n8nRealStatus?.status === "disabled" ? "معطّل" : "غير مهيأ"}.`
-          : `Test blocked: n8n is ${n8nRealStatus?.status === "disabled" ? "disabled" : "not configured"}.`,
-        "error"
-      );
-      return;
-    }
-
-    setIsSending(true);
-    const logId = `log_${Math.random().toString(36).substring(2, 9)}`;
-
-    try {
-      const bodyPayload: any = {
-        event: parsedPayload.event || selectedPreset,
-        payload: parsedPayload,
-      };
-
-      if (webhookUrl.trim() && webhookUrl.trim() !== "/api/n8n/webhook") {
-        bodyPayload.customWebhookUrl = webhookUrl.trim();
-      }
-
-      const res = await fetch("/api/n8n/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bodyPayload),
-      });
-
-      const resData = await res.json();
-
-      const newEntry: WebhookLogEntry = {
-        id: logId,
-        timestamp: new Date().toLocaleTimeString(),
-        event: parsedPayload.event || selectedPreset,
-        targetUrl: webhookUrl.trim() || "/api/n8n/webhook",
-        statusCode: resData.statusCode || res.status,
-        durationMs: typeof resData.durationMs === "number" ? resData.durationMs : 0,
-        requestPayload: parsedPayload,
-        responsePayload: resData,
-        status: res.ok && resData.status !== "failed" && resData.status !== "error" ? "success" : "error",
-      };
-
-      setLogs((prev) => [newEntry, ...prev]);
-
-      if (newEntry.status === "success") {
-        addToast(
-          isAr
-            ? `تم إرسال Trigger الـ n8n بنجاح! Execution ID: ${resData.executionId}`
-            : `n8n webhook triggered! Execution ID: ${resData.executionId}`,
-          "success"
-        );
-      } else {
-        addToast(isAr ? "فشل إرسال التريجر إلى n8n" : "n8n Webhook trigger failed", "error");
-      }
-    } catch (err: any) {
-      const failedEntry: WebhookLogEntry = {
-        id: logId,
-        timestamp: new Date().toLocaleTimeString(),
-        event: selectedPreset,
-        targetUrl: webhookUrl,
-        statusCode: 500,
-        durationMs: 0,
-        requestPayload: parsedPayload,
-        responsePayload: { error: err.message || "Network Error" },
-        status: "failed",
-      };
-      setLogs((prev) => [failedEntry, ...prev]);
-      addToast(isAr ? "خطأ في الاتصال بالسيرفر" : "Network connection error", "error");
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleCopyLog = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedLogId(id);
-    addToast(isAr ? "تم نسخ نتيجة الرد إلى الحافظة" : "Response payload copied", "info");
-    setTimeout(() => setCopiedLogId(null), 2000);
-  };
-
-  const handleClearLogs = () => {
-    setLogs([]);
-    addToast(isAr ? "تم مسح سجلات الاختبارات" : "Test logs cleared", "info");
-  };
+  if (!currentWorkspace || currentUser?.role === "staff") return null;
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Header Banner */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 sm:p-8 text-white shadow-xl border border-slate-800 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10">
-          <div className="flex items-center gap-2">
-            <span className="rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 px-3 py-1 text-xs font-extrabold uppercase flex items-center gap-1.5">
-              <Zap className="h-3.5 w-3.5" /> n8n Automation Engine
-            </span>
+      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex gap-4">
+            <div className="h-12 w-12 rounded-2xl bg-violet-500/10 flex items-center justify-center"><Bot className="h-6 w-6 text-violet-500" /></div>
+            <div><h2 className="text-xl font-black text-slate-900 dark:text-white">{isAr ? "وكلاء FOX الذكيون" : "FOX AI Agents"}</h2>
+              <p className="text-sm text-slate-500 mt-1">{isAr ? "تابع الوكلاء والمهام التي ينفذونها. إدارة n8n متاحة للـ Super Admin فقط." : "Monitor your agents and their work. n8n administration is restricted to Super Admin."}</p></div>
           </div>
-          <h1 className="mt-3 text-2xl font-black sm:text-3xl tracking-tight">
-            {isAr ? "مركز أتمتة واختبار Webhooks لـ n8n" : "n8n Webhook Testing Hub & Live Console"}
-          </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-300 font-medium">
-            {isAr
-              ? `قم باختبار الاتصال بسيرفر n8n الخاص بمساحة عمل (${currentWorkspace.name})، وإرسال حمولات JSON تجريبية، ومشاهدة سجل الاستجابة اللحظية.`
-              : `Test webhook endpoints for ${currentWorkspace.name}, send trigger JSON payloads, and inspect real-time execution logs.`}
-          </p>
+          <button onClick={load} disabled={loading} className="rounded-xl border border-slate-200 dark:border-slate-700 p-2 text-slate-500 hover:text-violet-500"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
         </div>
+        <div className="mt-4 flex items-center gap-2 text-xs font-bold text-emerald-600"><ShieldCheck className="h-4 w-4" />{isAr ? "عرض فقط — لا يوجد تحكم في workflows" : "Read-only — workflow controls are unavailable"}</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {agents.map((agent) => {
+          const label = ROLE_LABELS[agent.role]?.[isAr ? "ar" : "en"] || agent.role;
+          const running = agent.status === "running";
+          return <div key={agent.id} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+            <div className="flex items-center justify-between"><span className={`h-2.5 w-2.5 rounded-full ${running ? "bg-amber-500 animate-pulse" : agent.status === "error" ? "bg-red-500" : "bg-emerald-500"}`} />
+              <span className="text-[10px] font-black uppercase text-slate-400">{label}</span></div>
+            <h3 className="mt-3 font-black text-slate-900 dark:text-white">{agent.name.replace(/^FOX-/, "")}</h3>
+            <p className="mt-1 text-xs text-slate-500 min-h-8">{agent.description || label}</p>
+            <div className="mt-4 flex items-center justify-between text-[11px] font-bold"><span className={running ? "text-amber-600" : "text-emerald-600"}>{running ? (isAr ? "يعمل الآن" : "Running") : (isAr ? "جاهز" : "Ready")}</span><span className="text-slate-400">✓ {agent.successCount || 0} / ✕ {agent.failureCount || 0}</span></div>
+          </div>;
+        })}
+        {!loading && agents.length === 0 && <div className="md:col-span-2 xl:col-span-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{isAr ? "لا توجد بيانات Agents مسجلة بعد." : "No agent registry data is available yet."}</div>}
+      </div>
 
-        <div className="flex items-center gap-3 relative z-10 shrink-0">
-          <div className="rounded-2xl bg-slate-800/80 p-3.5 border border-slate-700/80 text-right dir-ltr">
-            {n8nStatusLoading ? (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                <span>{isAr ? "جاري التحقق..." : "Checking status..."}</span>
-              </div>
-            ) : n8nRealStatus?.status === "online" ? (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-400">
-                <Radio className="h-4 w-4 animate-pulse" />
-                <span>{isAr ? "n8n متصل وجاهز" : "n8n ONLINE & READY"}</span>
-              </div>
-            ) : n8nRealStatus?.status === "disabled" ? (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
-                <ShieldOff className="h-4 w-4" />
-                <span>{isAr ? "n8n معطّل" : "n8n DISABLED"}</span>
-              </div>
-            ) : n8nRealStatus?.status === "not_configured" ? (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-amber-400">
-                <Settings className="h-4 w-4" />
-                <span>{isAr ? "n8n غير مهيأ" : "n8n NOT CONFIGURED"}</span>
-              </div>
-            ) : n8nRealStatus?.status === "plan_restricted" ? (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-rose-400">
-                <Crown className="h-4 w-4" />
-                <span>{isAr ? "يتطلب Enterprise" : "n8n REQUIRES ENTERPRISE"}</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-xs font-extrabold text-slate-400">
-                <AlertCircle className="h-4 w-4" />
-                <span>{isAr ? "حالة غير معروفة" : "n8n UNKNOWN"}</span>
-              </div>
-            )}
-            <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-              {n8nRealStatus?.message
-                ? (isAr ? "• " : "• ") + n8nRealStatus.message
-                : `Workspace: ${currentWorkspace.id}`}
-            </div>
-          </div>
+      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3"><Activity className="h-5 w-5 text-violet-500" /><div><h3 className="font-black text-slate-900 dark:text-white">{isAr ? "آخر نشاط للوكلاء" : "Recent Agent Activity"}</h3><p className="text-xs text-slate-500">{isAr ? "الأحداث الخاصة بمنشأتك فقط" : "Only activity associated with this workspace"}</p></div></div>
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          {activities.map((item) => <div key={item.id} className="p-4 flex items-start gap-3"><Clock3 className="h-4 w-4 text-slate-400 mt-0.5" /><div className="min-w-0"><p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{item.message}</p><p className="text-[10px] text-slate-400 mt-1">{new Date(item.createdAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</p></div></div>)}
+          {!loading && activities.length === 0 && <div className="p-8 text-center text-sm text-slate-500">{isAr ? "لا يوجد نشاط مسجل لمنشأتك حتى الآن." : "No activity recorded for this workspace yet."}</div>}
         </div>
       </div>
 
-      {/* Automation Activity Summary — derived from real webhook execution logs */}
-      {logs.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            {
-              labelAr: "إجمالي التنفيذات",
-              labelEn: "Total Executions",
-              value: logs.length,
-              color: "text-white",
-              bg: "bg-slate-800/80 border-slate-700",
-              icon: <Zap className="h-4 w-4 text-amber-400" />,
-            },
-            {
-              labelAr: "ناجحة",
-              labelEn: "Succeeded",
-              value: logs.filter(l => l.status === "success").length,
-              color: "text-emerald-400",
-              bg: "bg-emerald-950/40 border-emerald-800/40",
-              icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
-            },
-            {
-              labelAr: "فاشلة",
-              labelEn: "Failed",
-              value: logs.filter(l => l.status === "failed" || l.status === "error").length,
-              color: "text-rose-400",
-              bg: "bg-rose-950/40 border-rose-800/40",
-              icon: <AlertCircle className="h-4 w-4 text-rose-400" />,
-            },
-            {
-              labelAr: "آخر تنفيذ",
-              labelEn: "Last Execution",
-              value: logs[0]?.timestamp ?? "—",
-              color: "text-slate-300",
-              bg: "bg-slate-800/80 border-slate-700",
-              icon: <Clock className="h-4 w-4 text-slate-400" />,
-            },
-          ].map((stat, idx) => (
-            <div
-              key={idx}
-              className={`rounded-2xl p-4 border space-y-1 ${stat.bg}`}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                {stat.icon}
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-                  {isAr ? stat.labelAr : stat.labelEn}
-                </span>
-              </div>
-              <div className={`text-xl font-black ${stat.color}`}>
-                {stat.value}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Main Testing Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Column: Webhook Config & Sample Payload Editor (7 cols) */}
-        <div className="lg:col-span-7 space-y-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                  <Workflow className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 dark:text-white">
-                    {isAr ? "إعدادات تريجر الـ Webhook" : "Webhook Trigger Configuration"}
-                  </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {isAr ? "حدد رابط الـ Webhook ونوع الحدث المراد اختباره" : "Set target webhook URL and sample trigger event"}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Target Webhook URL Input */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-extrabold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <Globe className="h-3.5 w-3.5 text-amber-500" />
-                  {isAr ? "رابط نقطة النهاية (Webhook URL):" : "Target Webhook Endpoint URL:"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setWebhookUrl("/api/n8n/webhook")}
-                  className="text-[10px] text-amber-600 dark:text-amber-400 hover:underline font-bold"
-                >
-                  {isAr ? "اعتماد السيرفر الافتراضي" : "Reset to Default"}
-                </button>
-              </label>
-              <input
-                type="text"
-                value={webhookUrl}
-                onChange={(e) => setWebhookUrl(e.target.value)}
-                placeholder="https://n8n.your-domain.com/webhook/..."
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2.5 text-xs font-mono text-slate-900 dark:text-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none"
-              />
-            </div>
-
-            {/* Event Preset Selector Buttons */}
-            <div className="space-y-2">
-              <label className="text-xs font-extrabold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Code2 className="h-3.5 w-3.5 text-amber-500" />
-                {isAr ? "نماذج الأحداث الجاهزة (Trigger Presets):" : "Select Sample Event Preset:"}
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {[
-                  { id: "crm_lead_created", labelAr: "عميل جديد CRM", labelEn: "New Lead Created" },
-                  { id: "appointment_scheduled", labelAr: "حجز موعد جديد", labelEn: "Appointment Scheduled" },
-                  { id: "customer_complaint_escalated", labelAr: "تصعيد شكوى عميل", labelEn: "Complaint Escalated" },
-                  { id: "payment_received", labelAr: "تأكيد الدفع Instapay", labelEn: "Payment Received" },
-                  { id: "custom_payload", labelAr: "حملة مخصصة Custom", labelEn: "Custom Payload" },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handlePresetChange(item.id)}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold transition text-right sm:text-center border ${
-                      selectedPreset === item.id
-                        ? "bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400 font-black shadow-xs"
-                        : "bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800"
-                    }`}
-                  >
-                    {isAr ? item.labelAr : item.labelEn}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* JSON Code Editor Box */}
-            <div className="space-y-2 pt-1">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-extrabold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Terminal className="h-3.5 w-3.5 text-amber-500" />
-                  {isAr ? "محتوى الحمولة (JSON Trigger Payload):" : "Trigger Request JSON Payload:"}
-                </label>
-                <button
-                  type="button"
-                  onClick={handleFormatJson}
-                  className="text-[11px] font-extrabold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 px-2.5 py-1 rounded-lg transition"
-                >
-                  {isAr ? "تنسيق الـ JSON ✨" : "Prettify JSON ✨"}
-                </button>
-              </div>
-
-              <div className="relative rounded-2xl overflow-hidden border border-slate-300 dark:border-slate-800 bg-slate-950 p-3">
-                <textarea
-                  value={payloadJson}
-                  onChange={(e) => handleJsonChange(e.target.value)}
-                  rows={10}
-                  className="w-full bg-transparent text-emerald-400 font-mono text-xs leading-relaxed focus:outline-none resize-y"
-                  spellCheck={false}
-                />
-              </div>
-
-              {jsonError && (
-                <div className="flex items-center gap-1.5 text-xs text-rose-500 font-bold bg-rose-500/10 p-2.5 rounded-xl border border-rose-500/20">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{jsonError}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Send Trigger Action Button */}
-            <button
-              onClick={handleSendWebhook}
-              disabled={isSending || !!jsonError || n8nRealStatus?.status !== "online"}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 py-3.5 text-xs sm:text-sm font-black text-white shadow-lg shadow-amber-500/20 hover:from-amber-600 hover:to-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSending ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  <span>{isAr ? "جاري إرسال التريجر إلى n8n..." : "Sending Trigger Payload..."}</span>
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4" />
-                  <span>{n8nRealStatus?.status === "online"
-                      ? (isAr ? "إرسال وتجربة الـ Webhook الآن" : "Send & Test Webhook Payload")
-                      : (isAr ? "اختبار n8n غير متاح حالياً" : "n8n test unavailable") }</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Right Column: Execution Response Console & Logs (5 cols) */}
-        <div className="lg:col-span-5 space-y-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4 flex flex-col h-full min-h-[500px]">
-            {/* Automation Activity Summary — real logs-derived */}
-            {(() => {
-              const total = logs.length;
-              const success = logs.filter((l) => l.status === "success").length;
-              const failed = logs.filter((l) => l.status !== "success").length;
-              const avgDur = total ? Math.round(logs.reduce((s, l) => s + (l.durationMs || 0), 0) / total) : 0;
-              const last = logs[0] || null;
-              return (
-                <div className="rounded-2xl bg-gradient-to-br from-amber-500/5 to-orange-500/5 border border-amber-200/60 dark:border-amber-900/40 p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500 text-white"><Zap className="h-4 w-4" /></div>
-                    <h3 className="text-xs font-black text-slate-900 dark:text-white tracking-tight">{isAr ? "نشاط التشغيل (Automation Activity)" : "Automation Activity"}</h3>
-                    <span className="ml-auto text-[10px] font-bold text-slate-500 dark:text-slate-400">{total} {isAr ? "تنفيذ" : "executions"}</span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "نجاح" : "Success"}</div>
-                      <div className="text-sm font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />{success}</div>
-                    </div>
-                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "فشل/خطأ" : "Failed / Error"}</div>
-                      <div className="text-sm font-black text-rose-600 dark:text-rose-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" />{failed}</div>
-                    </div>
-                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "متوسط الوقت" : "Avg Duration"}</div>
-                      <div className="text-sm font-black text-amber-600 dark:text-amber-400 flex items-center gap-1"><Clock className="h-3.5 w-3.5" />{avgDur}ms</div>
-                    </div>
-                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
-                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "آخر حدث" : "Last Event"}</div>
-                      <div className="text-xs font-black text-slate-700 dark:text-slate-200 truncate" title={last ? getEventLabel(last.event, isAr) : ""}>{last ? getEventLabel(last.event, isAr) : (isAr ? "—" : "—")}</div>
-                    </div>
-                  </div>
-                  {last && (
-                    <div className="flex items-center gap-2 rounded-xl bg-slate-950 text-white px-3 py-2 text-[11px] font-mono border border-slate-800">
-                      <span className={`font-black px-1.5 py-0.5 rounded ${last.status === "success" ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>{last.status === "success" ? (isAr ? "نجح" : "SUCCESS") : (isAr ? "خطأ" : "ERROR")}</span>
-                      <span className="text-slate-400">{last.timestamp}</span>
-                      <span className="ml-auto text-amber-400">{last.durationMs}ms • HTTP {last.statusCode}</span>
-                    </div>
-                  )}
-                  {total === 0 && (
-                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{isAr ? "لا توجد عمليات تشغيل مسجلة بعد. اضغط 'إرسال وتجربة الـ Webhook' لبدء التشغيل." : "No executions recorded yet. Click 'Send & Test Webhook Payload' to start."}</p>
-                  )}
-                </div>
-              );
-            })()}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  <Terminal className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 dark:text-white">
-                    {isAr ? "سجل استجابة n8n اللحظية" : "Live Execution Response Logs"}
-                  </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {isAr ? "مراقبة حالة الرد وسرعة الاستجابة بالمللي ثانية" : "Monitor HTTP status, duration, and output"}
-                  </p>
-                </div>
-              </div>
-
-              {logs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleClearLogs}
-                  className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg transition"
-                  title={isAr ? "مسح السجلات" : "Clear logs"}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Logs List Area */}
-            {logs.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-950/50 space-y-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-200 dark:bg-slate-800 text-slate-400">
-                  <Play className="h-6 w-6" />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    {isAr ? "لا توجد سجلات اختبار بعد" : "No webhook executions recorded yet"}
-                  </p>
-                  <p className="text-[11px] text-slate-400 max-w-xs">
-                    {isAr
-                      ? "اضغط على زر (إرسال وتجربة الـ Webhook) لإطلاق حمولة تجريبية وعرض النتيجة هنا."
-                      : "Click 'Send & Test Webhook Payload' to send a request and view live response details."}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4 overflow-y-auto max-h-[580px] pr-1">
-                {logs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-4 space-y-3 shadow-sm text-white"
-                  >
-                    {/* Log Header */}
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full ${
-                            log.status === "success"
-                              ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                              : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
-                          }`}
-                        >
-                          {log.status === "success" ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-                          HTTP {log.statusCode}
-                        </span>
-                        <span className="text-[11px] font-bold text-slate-300 font-mono" title={getEventLabel(log.event, isAr)}>
-                          {getEventLabel(log.event, isAr)}
-                        </span>
-                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">{getChannel(log.event)}</span>
-                      </div>
-
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3 text-amber-400" />
-                          {log.durationMs}ms
-                        </span>
-                        <span>{log.timestamp}</span>
-                      </div>
-                    </div>
-
-                    {/* Target Endpoint string */}
-                    <div className="text-[10px] text-slate-400 font-mono truncate dir-ltr text-left">
-                      📍 URL: {log.targetUrl}
-                    </div>
-
-                    {/* Response Payload Code Block */}
-                    <div className="relative group bg-slate-900 rounded-xl p-3 border border-slate-800">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-1.5">
-                        <span>RESPONSE JSON OUTPUT:</span>
-                        <button
-                          type="button"
-                          onClick={() => handleCopyLog(log.id, JSON.stringify(log.responsePayload, null, 2))}
-                          className="flex items-center gap-1 text-amber-400 hover:text-amber-300 transition"
-                        >
-                          {copiedLogId === log.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                          <span>{copiedLogId === log.id ? (isAr ? "تم النسخ" : "Copied") : (isAr ? "نسخ الرد" : "Copy")}</span>
-                        </button>
-                      </div>
-                      {log.status !== "success" && safeErrorSummary(log.responsePayload) && (
-                        <div className="text-[10px] font-medium text-rose-300 bg-rose-950/40 border border-rose-800/40 rounded-lg px-2.5 py-1.5 mb-2">⚠ {safeErrorSummary(log.responsePayload)}</div>
-                      )}
-                      <pre className="text-[11px] font-mono text-emerald-400 leading-relaxed overflow-x-auto max-h-48 scrollbar-thin">
-                        {JSON.stringify(log.responsePayload, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-      </div>
+      <div className="rounded-2xl bg-slate-900 text-white p-5 flex gap-3 items-start"><LockKeyhole className="h-5 w-5 text-amber-400 mt-0.5" /><div><p className="font-black text-sm">{isAr ? "n8n Engine محمي" : "n8n Engine Protected"}</p><p className="text-xs text-slate-300 mt-1">{isAr ? "صاحب المنشأة يرى حالة الوكلاء ونتائج أعمالهم فقط. لا توجد واجهة لتعديل أو تشغيل أو حذف workflows." : "Workspace owners can see agent status and outcomes only. There is no workflow edit, run, or delete control."}</p></div></div>
     </div>
   );
 };
