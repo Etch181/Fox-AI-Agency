@@ -4,6 +4,8 @@ import { PackageRecommendation } from "./PackageRecommendation";
 import { ClientAnalyticsDashboard } from "./ClientAnalyticsDashboard";
 import {
   HelpCircle,
+  CalendarCheck,
+  Clock,
   AlertCircle,
   ChevronRight,
   Users,
@@ -29,6 +31,7 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
+  Activity,
 } from "lucide-react";
 import {
   BarChart,
@@ -1257,6 +1260,77 @@ export const ClientDashboard: React.FC<{ onNavigate: (tab: any) => void }> = ({ 
       )}
 
       
+      {/* Automation Activity Center — real workspace-scoped status, no fake data */}
+      <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 shadow-xl dark:border-slate-800 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/20">
+              <Bot className="h-5.5 w-5.5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-white">
+                {isAr ? "مركز التشغيل الآلي" : "Automation Activity Center"}
+              </h3>
+              <p className="text-[11px] text-slate-400 font-medium">
+                {isAr ? "حالة الربط والتشغيل الآلي لمساحتك" : "Channel connections & live automation status"}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate("client_n8n")}
+            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-[11px] font-black text-slate-900 shadow-lg shadow-amber-500/20 hover:bg-amber-400 transition"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            {isAr ? "فتح مركز n8n" : "Open n8n Hub"}
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { key: "whatsapp", label: "WhatsApp", color: "text-emerald-400", dot: "bg-emerald-400", connected: currentWorkspace.whatsappBotStatus === "connected", statusAr: "متصل", statusEn: "Connected", notConnectedAr: "غير متصل", notConnectedEn: "Not connected" },
+            { key: "telegram", label: "Telegram", color: "text-sky-400", dot: "bg-sky-400", connected: currentWorkspace.telegramBotStatus === "connected", statusAr: "متصل", statusEn: "Connected", notConnectedAr: "غير متصل", notConnectedEn: "Not connected" },
+            { key: "instagram", label: "Instagram", color: "text-pink-400", dot: "bg-pink-400", connected: currentWorkspace.instagramBotStatus === "connected" || Boolean(currentWorkspace.instagramBusinessAccountId), statusAr: "متصل", statusEn: "Connected", notConnectedAr: "غير متصل", notConnectedEn: "Not connected" },
+          ].map((ch) => (
+            <div key={ch.key} className="rounded-xl bg-white/5 border border-white/10 p-3 flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black text-slate-300">{ch.label}</span>
+                <span className={`h-2 w-2 rounded-full ${ch.connected ? ch.dot : "bg-slate-600"} animate-pulse`} />
+              </div>
+              <span className={`text-xs font-bold ${ch.connected ? ch.color : "text-slate-500"}`}>
+                {ch.connected ? (isAr ? ch.statusAr : ch.statusEn) : (isAr ? ch.notConnectedAr : ch.notConnectedEn)}
+              </span>
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const wsLeads = crmLeads.filter(l => l.workspaceId === currentWorkspace.id);
+          const followUpsDue = wsLeads.filter((l) => { const due = (l as any).followUpDate ? new Date((l as any).followUpDate).getTime() : 0; return due > 0 && due <= Date.now() && !["Customer","Won","Lost","VIP"].includes(String(l.status)); }).length;
+          const followUpsSent = wsLeads.filter((l) => (l as any).followUpStatus === "sent").length;
+          const totalLeads = wsLeads.length;
+          const wsAppointments = appointments.filter(a => a.workspaceId === currentWorkspace.id).length;
+          return (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-2.5 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1"><Users className="h-3.5 w-3.5 text-indigo-400" /><span className="text-[10px] font-bold text-slate-400">{isAr ? "إجمالي العملاء" : "Total Leads"}</span></div>
+                <span className="text-base font-black text-white">{totalLeads}</span>
+              </div>
+              <div className="rounded-xl bg-amber-500/15 border border-amber-500/30 px-3.5 py-2.5 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-amber-400" /><span className="text-[10px] font-bold text-amber-400">{isAr ? "متابعة مستحقة" : "Follow-ups Due"}</span></div>
+                <span className="text-base font-black text-amber-300">{followUpsDue}</span>
+              </div>
+              <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3.5 py-2.5 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /><span className="text-[10px] font-bold text-emerald-400">{isAr ? "تم الإرسال" : "Sent"}</span></div>
+                <span className="text-base font-black text-emerald-300">{followUpsSent}</span>
+              </div>
+              <div className="rounded-xl bg-blue-500/15 border border-blue-500/30 px-3.5 py-2.5 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1"><CalendarCheck className="h-3.5 w-3.5 text-sky-400" /><span className="text-[10px] font-bold text-sky-400">{isAr ? "المواعيد" : "Appointments"}</span></div>
+                <span className="text-base font-black text-sky-300">{wsAppointments}</span>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
       {/* Advanced Analytics & Insights */}
       <ClientAnalyticsDashboard />
 
