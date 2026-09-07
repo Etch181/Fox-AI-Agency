@@ -264,9 +264,12 @@ const AppContent: React.FC = () => {
       if (!currentUser) return;
 
       const authorized = resolveAuthorizedView(currentUser.role, requested);
-      const industryAuthorized = isIndustryViewAllowed(authorized) ? authorized : "client_dashboard";
-      setRequestedView(industryAuthorized);
-      localStorage.setItem("fox_active_view", industryAuthorized);
+      setRequestedView(authorized);
+      localStorage.setItem("fox_active_view", authorized);
+      if (!isIndustryViewAllowed(authorized)) {
+        setRequestedView("client_dashboard");
+        localStorage.setItem("fox_active_view", "client_dashboard");
+      }
     },
     [currentUser, isIndustryViewAllowed],
   );
@@ -307,11 +310,14 @@ const AppContent: React.FC = () => {
     if (!currentUser) return;
 
     const authorized = resolveAuthorizedView(currentUser.role, requestedView);
-    const industryAuthorized = isIndustryViewAllowed(authorized) ? authorized : "client_dashboard";
-    if (industryAuthorized !== requestedView) {
-      setRequestedView(industryAuthorized);
+    if (authorized !== requestedView) {
+      setRequestedView(authorized);
     }
-    localStorage.setItem("fox_active_view", industryAuthorized);
+    localStorage.setItem("fox_active_view", authorized);
+    if (!isIndustryViewAllowed(authorized)) {
+      setRequestedView("client_dashboard");
+      localStorage.setItem("fox_active_view", "client_dashboard");
+    }
   }, [currentUser, requestedView, isIndustryViewAllowed]);
 
   if (!authHydrated) {
