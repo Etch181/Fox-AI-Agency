@@ -34,21 +34,20 @@ export const ClientAnalyticsDashboard: React.FC = () => {
   const workspaceAppointments = appointments.filter(appt => appt.workspaceId === currentWorkspace.id);
   const metrics = geminiMetrics.find(m => m.workspaceId === currentWorkspace.id);
 
-  // 1. Daily Chat Volume (Mocking last 7 days based on leads or static trends since we don't have a dedicated chat history table)
+  // 1. Daily Chat Volume — real derived data from workspace metrics (no simulation)
   const chatVolumeData = useMemo(() => {
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      
-      // Simulate varied chat volume for visual appeal
-      const baseChats = (metrics?.totalCalls || 0) / 7;
-      const randomVariance = Math.floor(Math.random() * (baseChats * 0.5)) - (baseChats * 0.25);
-      
+
+      const totalCalls = metrics?.totalCalls || 0;
+      const baseChats = totalCalls > 0 ? Math.floor(totalCalls / 7) : 0;
+
       days.push({
         date: dateStr,
-        volume: Math.max(0, Math.floor(baseChats + randomVariance + 10)) // add 10 just to show something
+        volume: baseChats,
       });
     }
     return days;
@@ -57,7 +56,7 @@ export const ClientAnalyticsDashboard: React.FC = () => {
   // 2. Booking Conversion Rates
   const conversionData = useMemo(() => {
     // Total interactions vs total bookings
-    const totalInteractions = metrics?.totalCalls || workspaceLeads.length * 5 || 100;
+    const totalInteractions = metrics?.totalCalls || workspaceLeads.length;
     const totalBookings = workspaceAppointments.length;
     const conversionRate = totalInteractions > 0 ? ((totalBookings / totalInteractions) * 100).toFixed(1) : "0";
 
@@ -68,22 +67,20 @@ export const ClientAnalyticsDashboard: React.FC = () => {
     };
   }, [metrics, workspaceLeads, workspaceAppointments]);
 
-  // 3. Agent Response Times (from geminiMetrics)
+  // 3. Agent Response Times — derived from workspace metrics (no simulation)
   const responseTimeData = useMemo(() => {
     const latencies = metrics?.latencyTrend || [];
-    // Convert to mock daily data for chart
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       
-      const val = latencies[i % latencies.length] || metrics?.avgLatencyMs || 800;
-      const variation = Math.random() * 200 - 100;
-      
+      const val = latencies[i % latencies.length] || metrics?.avgLatencyMs || 0;
+
       days.push({
         date: dateStr,
-        timeMs: Math.max(200, Math.floor(val + variation))
+        timeMs: Math.max(0, Math.floor(val)),
       });
     }
     return days;
