@@ -541,6 +541,51 @@ export const ClientN8n: React.FC = () => {
         {/* Right Column: Execution Response Console & Logs (5 cols) */}
         <div className="lg:col-span-5 space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4 flex flex-col h-full min-h-[500px]">
+            {/* Automation Activity Summary — real logs-derived */}
+            {(() => {
+              const total = logs.length;
+              const success = logs.filter((l) => l.status === "success").length;
+              const failed = logs.filter((l) => l.status !== "success").length;
+              const avgDur = total ? Math.round(logs.reduce((s, l) => s + (l.durationMs || 0), 0) / total) : 0;
+              const last = logs[0] || null;
+              return (
+                <div className="rounded-2xl bg-gradient-to-br from-amber-500/5 to-orange-500/5 border border-amber-200/60 dark:border-amber-900/40 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500 text-white"><Zap className="h-4 w-4" /></div>
+                    <h3 className="text-xs font-black text-slate-900 dark:text-white tracking-tight">{isAr ? "نشاط التشغيل (Automation Activity)" : "Automation Activity"}</h3>
+                    <span className="ml-auto text-[10px] font-bold text-slate-500 dark:text-slate-400">{total} {isAr ? "تنفيذ" : "executions"}</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "نجاح" : "Success"}</div>
+                      <div className="text-sm font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />{success}</div>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "فشل/خطأ" : "Failed / Error"}</div>
+                      <div className="text-sm font-black text-rose-600 dark:text-rose-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" />{failed}</div>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "متوسط الوقت" : "Avg Duration"}</div>
+                      <div className="text-sm font-black text-amber-600 dark:text-amber-400 flex items-center gap-1"><Clock className="h-3.5 w-3.5" />{avgDur}ms</div>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
+                      <div className="text-[10px] font-bold text-slate-400">{isAr ? "آخر حدث" : "Last Event"}</div>
+                      <div className="text-xs font-black text-slate-700 dark:text-slate-200 truncate">{last ? last.event : (isAr ? "—" : "—")}</div>
+                    </div>
+                  </div>
+                  {last && (
+                    <div className="flex items-center gap-2 rounded-xl bg-slate-950 text-white px-3 py-2 text-[11px] font-mono border border-slate-800">
+                      <span className={`font-black px-1.5 py-0.5 rounded ${last.status === "success" ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>{last.status === "success" ? (isAr ? "نجح" : "SUCCESS") : (isAr ? "خطأ" : "ERROR")}</span>
+                      <span className="text-slate-400">{last.timestamp}</span>
+                      <span className="ml-auto text-amber-400">{last.durationMs}ms • HTTP {last.statusCode}</span>
+                    </div>
+                  )}
+                  {total === 0 && (
+                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{isAr ? "لا توجد عمليات تشغيل مسجلة بعد. اضغط 'إرسال وتجربة الـ Webhook' لبدء التشغيل." : "No executions recorded yet. Click 'Send & Test Webhook Payload' to start."}</p>
+                  )}
+                </div>
+              );
+            })()}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
