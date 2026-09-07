@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { Workflow, CheckCircle2, AlertCircle, ShoppingBag, MessageCircle, Instagram, Code } from "lucide-react";
+import { Workflow, CheckCircle2, AlertCircle, ShoppingBag, MessageCircle, Instagram, Code, Facebook } from "lucide-react";
 import { ClientWhatsAppQR } from "./ClientWhatsAppQR";
 
 export const ClientIntegrations: React.FC = () => {
@@ -35,6 +35,14 @@ export const ClientIntegrations: React.FC = () => {
         desc: isAr ? "الرد الآلي على رسائل انستجرام والتعليقات" : "Auto-reply to Instagram DMs & comments",
       },
       {
+        id: "messenger",
+        name: "Messenger / Facebook Page",
+        icon: <Facebook className="h-6 w-6 text-blue-700" />,
+        connected: false,
+        unavailableReason: "Meta APP_ID missing (external blocker) — connection unavailable",
+        desc: isAr ? "ربط صفحة فيسبوك للرد التلقائي عبر Messenger — متاح عند تهيئة Meta App ID" : "Connect Facebook Page for Messenger auto-reply — available once Meta App ID is configured",
+      },
+      {
         id: "telegram",
         name: "Telegram Bot",
         icon: <MessageCircle className="h-6 w-6 text-blue-500"/>,
@@ -50,6 +58,15 @@ export const ClientIntegrations: React.FC = () => {
   };
 
   const displayList = activeTab === "messaging" ? integrations.messaging : integrations.ecommerce;
+
+  type IntegrationItem = {
+    id: string;
+    name: string;
+    icon: React.ReactNode;
+    connected: boolean;
+    desc: string;
+    unavailableReason?: string;
+  };
 
   if (showWhatsAppQR) {
     return (
@@ -95,7 +112,7 @@ export const ClientIntegrations: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {displayList.map(integration => (
+        {displayList.map((integration: IntegrationItem) => (
           <div key={integration.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col justify-between">
             <div>
               <div className="flex justify-between items-start mb-4">
@@ -106,6 +123,10 @@ export const ClientIntegrations: React.FC = () => {
                   <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-900">
                     <CheckCircle2 className="h-3 w-3" /> {isAr ? "متصل والبوت نشط" : "Connected & Live"}
                   </span>
+                ) : integration.unavailableReason ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-900">
+                    <AlertCircle className="h-3 w-3" /> {isAr ? "غير متوفر" : "Unavailable"}
+                  </span>
                 ) : (
                   <span className="flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-full">
                     <AlertCircle className="h-3 w-3" /> {isAr ? "غير متصل" : "Disconnected"}
@@ -113,11 +134,17 @@ export const ClientIntegrations: React.FC = () => {
                 )}
               </div>
               <h3 className="font-bold text-slate-900 dark:text-white mb-1">{integration.name}</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">{integration.desc}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">{integration.desc}</p>
+              {integration.unavailableReason && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-3 leading-relaxed font-medium">
+                  ⚠ {isAr ? "يتطلب إعداد Meta App ID خارجي — غير متاح حالياً" : "Requires external Meta App ID setup — not available currently"}
+                </p>
+              )}
             </div>
             
             <button
               onClick={async () => {
+                if (integration.unavailableReason) return;
                 if (integration.id === "whatsapp") {
                   setShowWhatsAppQR(true);
                 } else if (integration.id === "instagram") {
@@ -141,13 +168,18 @@ export const ClientIntegrations: React.FC = () => {
                   }
                 }
               }}
+              disabled={Boolean(integration.unavailableReason)}
               className={`w-full py-2.5 rounded-xl text-xs font-bold transition ${
-                integration.connected
+                integration.unavailableReason
+                  ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-200 dark:border-slate-700"
+                  : integration.connected
                   ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800"
                   : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
               }`}
             >
-              {integration.id === "whatsapp"
+              {integration.unavailableReason
+                ? (isAr ? "غير متوفر — Meta App ID مفقود" : "Unavailable — Meta App ID missing")
+                : integration.id === "whatsapp"
                 ? (integration.connected ? (isAr ? "إدارة WhatsApp Cloud API" : "Manage Cloud API Connection") : (isAr ? "ربط WhatsApp Cloud API الآن" : "Connect WhatsApp Cloud API"))
                 : (integration.connected ? (isAr ? "إدارة الربط" : "Manage Connection") : (isAr ? "ربط الآن" : "Connect Now"))
               }
