@@ -34,7 +34,6 @@ export const AdminGeminiMonitoring: React.FC = () => {
   const { t, isAr } = useTranslation();
   const {
     geminiMetrics,
-    simulateGeminiPing,
     clearTenantErrorLogs,
     resetGeminiMetrics,
     addToast,
@@ -49,32 +48,14 @@ export const AdminGeminiMonitoring: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState<string>("all");
 
   // Real-time live pulse state
-  const [isLiveAutoRefresh, setIsLiveAutoRefresh] = useState<boolean>(true);
-  const [lastPulseTime, setLastPulseTime] = useState<string>("");
-  const [isPingingAll, setIsPingingAll] = useState<boolean>(false);
-  const [pingingTenantId, setPingingTenantId] = useState<string | null>(null);
 
   // Selected Tenant for detailed inspection modal
   const [selectedTenantModal, setSelectedTenantModal] = useState<GeminiTenantMetrics | null>(null);
+  const isPingingAll = false;
+  const pingingTenantId = null;
   const [activeTab, setActiveTab] = useState<"tenants" | "error_stream" | "health_matrix">("tenants");
 
-  // Real-time simulation loop
-  useEffect(() => {
-    let interval: any = null;
-    if (isLiveAutoRefresh && geminiMetrics.length > 0) {
-      interval = setInterval(() => {
-        // Pick a random tenant to simulate live API traffic
-        const randomTenant = geminiMetrics[Math.floor(Math.random() * geminiMetrics.length)];
-        if (randomTenant) {
-          simulateGeminiPing(randomTenant.workspaceId);
-          setLastPulseTime(new Date().toLocaleTimeString());
-        }
-      }, 4000); // Pulse every 4 seconds
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isLiveAutoRefresh, geminiMetrics]);
+  // Live telemetry is read-only. No synthetic pulses or simulated API calls.
 
   // Global Aggregate Statistics
   const globalStats = useMemo(() => {
@@ -155,53 +136,22 @@ export const AdminGeminiMonitoring: React.FC = () => {
     return logs;
   }, [geminiMetrics]);
 
-  // Trigger diagnostic ping for single tenant
-  const handlePingTenant = async (workspaceId: string, workspaceName: string) => {
-    setPingingTenantId(workspaceId);
-    try {
-      const res = await simulateGeminiPing(workspaceId);
-      if (res.success) {
-        addToast(
-          isAr
-            ? `اختبار Gemini API ناجح لـ ${workspaceName} (${res.latencyMs}ms)`
-            : `Gemini API ping successful for ${workspaceName} (${res.latencyMs}ms)`,
-          "success"
-        );
-      } else {
-        addToast(
-          isAr
-            ? `فشل اختبار Gemini API لـ ${workspaceName}: ${res.errorCode}`
-            : `Gemini API ping failed for ${workspaceName}: ${res.errorCode}`,
-          "error"
-        );
-      }
-    } finally {
-      setPingingTenantId(null);
-    }
-  };
-
-  // Trigger diagnostic ping for all tenants
-  const handlePingAllTenants = async () => {
-    setIsPingingAll(true);
+  const handlePingTenant = async (_workspaceId: string, workspaceName: string) => {
     addToast(
-      isAr ? "جاري تشغيل الفحص الشامل لجميع المؤسسات..." : "Executing full diagnostic ping across all tenants...",
+      isAr
+        ? `لا يمكن تنفيذ Ping تجريبي: لوحة المراقبة تعرض Telemetry حقيقية فقط — ${workspaceName}`
+        : `Synthetic ping is disabled: this dashboard only displays real telemetry — ${workspaceName}`,
       "info"
     );
+  };
 
-    for (const m of geminiMetrics) {
-      await simulateGeminiPing(m.workspaceId);
-    }
-
-    setIsPingingAll(false);
-    addToast(isAr ? "اكتمل الفحص التشخيصي الشامل بنجاح!" : "All tenant diagnostic pings completed!", "success");
-
-    await addAuditLog({
-      action: "Gemini API Diagnostic Sweep Executed",
-      category: "api",
-      severity: "info",
-      target: "Gemini AI API Engine",
-      details: "Triggered diagnostic health and latency ping across all workspace tenants.",
-    });
+  const handlePingAllTenants = async () => {
+    addToast(
+      isAr
+        ? "لا توجد عملية فحص وهمية. سيتم عرض البيانات فقط عند وجود استدعاءات AI حقيقية."
+        : "Synthetic diagnostic sweeps are disabled. Data appears only from real AI calls.",
+      "info"
+    );
   };
 
   // Clear tenant error logs
@@ -236,11 +186,11 @@ export const AdminGeminiMonitoring: React.FC = () => {
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-black uppercase tracking-wider">
-              <Activity className="h-3.5 w-3.5 text-indigo-400 animate-pulse" />
-              <span>{isAr ? "مراقبة البنية التحتية لـ Gemini AI" : "Gemini AI Telemetry Hub"}</span>
+              <Activity className="h-3.5 w-3.5 text-indigo-400" />
+              <span>{isAr ? "مراقبة مزود الذكاء الاصطناعي" : "AI Provider Telemetry Hub"}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {isAr ? "لوحة مراقبة زَمَن الاستجابة ونسبة الأخطاء" : "Gemini API Latency & Error Rate Dashboard"}
+              {isAr ? "مراقبة Telemetry لمزود الذكاء الاصطناعي الحقيقي" : "Real AI Provider Telemetry Dashboard"}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl font-medium leading-relaxed">
               {isAr
@@ -250,36 +200,17 @@ export const AdminGeminiMonitoring: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 shrink-0">
-            {/* Live Auto-Refresh Toggle */}
-            <button
-              onClick={() => setIsLiveAutoRefresh(!isLiveAutoRefresh)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold border transition shadow-md ${
-                isLiveAutoRefresh
-                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30"
-                  : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"
-              }`}
-            >
-              {isLiveAutoRefresh ? (
-                <>
-                  <Radio className="h-4 w-4 text-emerald-400 animate-pulse" />
-                  <span>{isAr ? "البث المباشر: نشط (Pulse)" : "Live Telemetry: ON"}</span>
-                </>
-              ) : (
-                <>
-                  <Pause className="h-4 w-4 text-slate-400" />
-                  <span>{isAr ? "البث المباشر: متوقف" : "Live Telemetry: OFF"}</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold border bg-slate-800/70 border-slate-700 text-slate-300">
+              <Radio className="h-4 w-4 text-slate-500" />
+              <span>{isAr ? "قراءة فقط — بيانات حقيقية" : "Read-only — real data only"}</span>
+            </div>
 
-            {/* Trigger All Diagnostic Pings */}
             <button
               onClick={handlePingAllTenants}
-              disabled={isPingingAll}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white text-xs font-black shadow-lg shadow-orange-500/20 transition disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-black transition"
             >
-              <RefreshCw className={`h-4 w-4 ${isPingingAll ? "animate-spin" : ""}`} />
-              <span>{isAr ? "فحص شامل لكل المؤسسات" : "Ping All Tenants"}</span>
+              <RefreshCw className="h-4 w-4" />
+              <span>{isAr ? "لا يوجد فحص وهمي" : "No synthetic ping"}</span>
             </button>
           </div>
         </div>
