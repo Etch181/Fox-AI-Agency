@@ -35,6 +35,34 @@ interface WebhookLogEntry {
   status: "success" | "error" | "failed";
 }
 
+
+const EVENT_LABEL_MAP: Record<string, { ar: string; en: string }> = {
+  crm_lead_created: { ar: "عميل جديد / CRM", en: "New Lead / CRM" },
+  appointment_scheduled: { ar: "حجز موعد", en: "Appointment Scheduled" },
+  customer_complaint_escalated: { ar: "تصعيد شكوى", en: "Complaint Escalated" },
+  payment_received: { ar: "دفع Instapay", en: "Payment Received" },
+  custom_payload: { ar: "حمولة مخصصة", en: "Custom Payload" },
+};
+
+function getEventLabel(event: string, isAr: boolean) {
+  return EVENT_LABEL_MAP[event]?.[isAr ? "ar" : "en"] ?? (isAr ? event : event);
+}
+
+function getChannel(event: string) {
+  if (event.includes("crm") || event.includes("lead")) return "CRM";
+  if (event.includes("appointment")) return "SCHEDULE";
+  if (event.includes("complaint")) return "SUPPORT";
+  if (event.includes("payment")) return "PAYMENTS";
+  return "n8n";
+}
+
+function safeErrorSummary(resp: any): string | null {
+  if (!resp || typeof resp !== "object") return null;
+  const msg = resp.error || resp.message || resp.errorMessage || resp.details;
+  if (typeof msg === "string" && msg.length > 0 && msg.length < 120) return msg;
+  return null;
+}
+
 export const ClientN8n: React.FC = () => {
   const { currentWorkspace, addToast, language } = useApp();
   const isAr = language === "ar";
@@ -570,7 +598,7 @@ export const ClientN8n: React.FC = () => {
                     </div>
                     <div className="rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2.5">
                       <div className="text-[10px] font-bold text-slate-400">{isAr ? "آخر حدث" : "Last Event"}</div>
-                      <div className="text-xs font-black text-slate-700 dark:text-slate-200 truncate">{last ? last.event : (isAr ? "—" : "—")}</div>
+                      <div className="text-xs font-black text-slate-700 dark:text-slate-200 truncate" title={last ? getEventLabel(last.event, isAr) : ""}>{last ? getEventLabel(last.event, isAr) : (isAr ? "—" : "—")}</div>
                     </div>
                   </div>
                   {last && (
@@ -650,9 +678,10 @@ export const ClientN8n: React.FC = () => {
                           {log.status === "success" ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
                           HTTP {log.statusCode}
                         </span>
-                        <span className="text-[11px] font-bold text-slate-300 font-mono">
-                          {log.event}
+                        <span className="text-[11px] font-bold text-slate-300 font-mono" title={getEventLabel(log.event, isAr)}>
+                          {getEventLabel(log.event, isAr)}
                         </span>
+                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">{getChannel(log.event)}</span>
                       </div>
 
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
@@ -682,6 +711,9 @@ export const ClientN8n: React.FC = () => {
                           <span>{copiedLogId === log.id ? (isAr ? "تم النسخ" : "Copied") : (isAr ? "نسخ الرد" : "Copy")}</span>
                         </button>
                       </div>
+                      {log.status !== "success" && safeErrorSummary(log.responsePayload) && (
+                        <div className="text-[10px] font-medium text-rose-300 bg-rose-950/40 border border-rose-800/40 rounded-lg px-2.5 py-1.5 mb-2">⚠ {safeErrorSummary(log.responsePayload)}</div>
+                      )}
                       <pre className="text-[11px] font-mono text-emerald-400 leading-relaxed overflow-x-auto max-h-48 scrollbar-thin">
                         {JSON.stringify(log.responsePayload, null, 2)}
                       </pre>
