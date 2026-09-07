@@ -40,7 +40,6 @@ export interface GeneratedSocialPost {
   recommendedTime: string;
   bestDays: string;
   reason: string;
-  engagementBoost: string;
   suggestedVisualPrompt?: string;
   imageUrl?: string;
   targetAudience: string;
@@ -161,7 +160,6 @@ export const ClientMarketingAgent: React.FC = () => {
           recommendedTime: data.recommendedTime || "",
           bestDays: data.bestDays || "",
           reason: data.reason || "",
-          engagementBoost: data.engagementBoost || "",
           suggestedVisualPrompt: data.suggestedVisualPrompt,
           targetAudience
         };
@@ -592,9 +590,6 @@ export const ClientMarketingAgent: React.FC = () => {
                       <Clock className="w-4 h-4 text-amber-600" />
                       <span>{isAr ? "أفضل وقت وتوقيت لنشر هذا المنشور لجمهورك" : "Optimal Publishing Time Advice"}</span>
                     </h4>
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-white text-[11px] font-black">
-                      {currentResult.engagementBoost}
-                    </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -739,7 +734,6 @@ export const ClientMarketingAgent: React.FC = () => {
                     <Clock className="w-3.5 h-3.5 text-amber-600" />
                     <span>{isAr ? `الوقت الموصى به: ${post.recommendedTime}` : `Best Time: ${post.recommendedTime}`}</span>
                   </div>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">{post.engagementBoost}</span>
                 </div>
               </div>
               ))}

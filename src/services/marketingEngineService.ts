@@ -267,12 +267,13 @@ export async function generateMarketingContent(
   platform: 'facebook' | 'instagram',
   previousContent?: string[]
 ): Promise<{ content: string; topic: string; recommendedTime: BestTimeRecommendation }> {
-  // Connect to existing ClientMarketingAgent generation logic via bridge
-  const { publishMarketingContent } = await import('./marketingPublishingBridge.ts');
-  const timeRec = recommendPublishTime(strategy, platform);
-  const topic = strategy.campaignObjective || strategy.businessGoal || 'Social Engagement';
-  const content = `Generated for ${platform}: ${topic}. Brand voice: ${strategy.toneBrandVoice}. Audience: ${strategy.targetAudience}.`;
-  return { content, topic, recommendedTime: timeRec };
+  // Never fabricate marketing copy. Real generation will come from the configured
+  // AI provider or the n8n Marketing FOX workflow.
+  const topic = strategy.campaignObjective || strategy.businessGoal || '';
+  if (!topic.trim()) {
+    throw new Error('MARKETING_STRATEGY_TOPIC_REQUIRED');
+  }
+  throw new Error('MARKETING_AI_PROVIDER_UNAVAILABLE');
 }
 
 export interface MarketingAutomationStatus {

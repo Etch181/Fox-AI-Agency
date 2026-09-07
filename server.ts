@@ -334,7 +334,7 @@ app.post("/api/verify-otp", (req, res) => {
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn("GEMINI_API_KEY is not set. Gemini API calls will run in fallback smart mode.");
+    console.warn("GEMINI_API_KEY is not set. Gemini API calls are unavailable until a real provider is configured.");
     return null;
   }
   return new GoogleGenAI({
@@ -389,7 +389,6 @@ app.post("/api/generate-ai-post", async (req, res) => {
   "recommendedTime": "الوقت المقترح (مثال: اليوم الساعة 8:00 مساءً)",
   "bestDays": "أفضل الأيام (مثال: الأحد، الثلاثاء، الخميس)",
   "reason": "سبب اختيار هذا الوقت للجمهور المستهدف",
-  "engagementBoost": "+65% تفاعل متوقع",
   "suggestedVisualPrompt": "وصف الصورة المقترحة للمنشور"
 }`;
 
@@ -409,57 +408,12 @@ app.post("/api/generate-ai-post", async (req, res) => {
       }
     }
 
-    // Fallback logic if Gemini is unavailable or errors
-    let bestTimeObj = {
-      recommendedTime: "اليوم الساعة 7:30 مساءً",
-      bestDays: "الأحد، الثلاثاء، الخميس",
-      reason: "فترة الذروة المسائية عقب ساعات العمل الرسمية حيث تزداد نسبة تصفح مواقع التواصل الاجتماعي.",
-      engagementBoost: "+60% زيادة في التفاعل",
-      suggestedVisualPrompt: "تصميم عصري وجذاب يعبر عن التطور التكنولوجي والذكاء الاصطناعي بأسلوب الوكالة"
-    };
-
-    if (platform === "instagram") {
-      bestTimeObj = {
-        recommendedTime: "اليوم الساعة 6:00 مساءً إلى 9:00 مساءً",
-        bestDays: "الإثنين، الأربعاء، الجمعة",
-        reason: "أوقات التصفح المكثف لإنستغرام من قِبل الجمهور المهتم بالخدمات البصرية والمحتوى الجذاب.",
-        engagementBoost: "+75% وصول أعلى",
-        suggestedVisualPrompt: "صورة عالية الجودة بألوان زاهية وتباين مرتفع تبرز فائدة الخدمة"
-      };
-    } else if (platform === "linkedin") {
-      bestTimeObj = {
-        recommendedTime: "غداً الساعة 9:00 صباحاً أو 1:00 ظهراً",
-        bestDays: "الثلاثاء، الأربعاء، الخميس",
-        reason: "ساعات العمل الرسمية وفترات الاستراحة للشركات والمدراء ورواد الأعمال على لينكد إن.",
-        engagementBoost: "+50% تفاعل مهني",
-        suggestedVisualPrompt: "إنفوجرافيك احترافي ملخص مع شعار الوكالة وأرقام نمو واضحة"
-      };
-    } else if (platform === "twitter") {
-      bestTimeObj = {
-        recommendedTime: "اليوم الساعة 12:00 ظهراً أو 8:00 مساءً",
-        bestDays: "طوال أيام الأسبوع (خاصة الأحد إلى الخميس)",
-        reason: "أوقات متابعة الأخبار والتغريدات السريعة خلال فترة الظهيرة والمساء.",
-        engagementBoost: "+55% إعادات تغريد",
-        suggestedVisualPrompt: "تصميم بسيط مركز مع نص مختصر وواضح"
-      };
-    } else if (platform === "tiktok") {
-      bestTimeObj = {
-        recommendedTime: "اليوم الساعة 8:30 مساءً إلى 11:00 مساءً",
-        bestDays: "الخميس، الجمعة، السبت",
-        reason: "ذروة مشاهدات الفيديوهات القصيرة والمحتوى الترفيهي والتسويقي في نهاية الأسبوع.",
-        engagementBoost: "+85% مشاهدات إضافية",
-        suggestedVisualPrompt: "فيديو قصير تفاعلي مدته 15-30 ثانية يعرض النتيجة النهائية لاستخدام الخدمة"
-      };
-    }
-
-    const generatedPostContent = isAr
-      ? `🔥 **هل ترغب في زيادة مبيعات مشروعك وتحسين تجربة عملائك بأحدث تقنيات الذكاء الاصطناعي؟**\n\nتتيح لك منصتنا تفعيل وكلاء ذكاء اصطناعي مخصصين لـ (${targetAudience}) يقدمون:\n\n✨ **الرد الفوري على الاستفسارات** على مدار 24 ساعة دون تأخير.\n🤖 **أتمتة المبيعات وحجز المواعيد** تلقائياً عبر واتساب وفيسبوك.\n📊 **تنسيق بيانات العملاء والربط مع نظام إدارة علاقات العملاء CRM**.\n💡 **تقليل تكاليف خدمة العملاء** بنسبة تصل إلى 80%.\n\n👇 **كيف تبدأ الآن؟**\nاكتب كلمة **"تفاصيل"** أو **"مهتم"** في التعليقات أو أرسل لنا رسالة خاصة لتصلك كافة التفاصيل ورابط التجربة المباشرة فوراً! 📩⚡\n\n#ذكاء_اصطناعي #تسويق_رقمي #أتمتة_المشاريع #FoxAI #${platform}`
-      : `🔥 **Ready to Scale Your Business & Automate Sales with AI?**\n\nEmpower your business with custom AI Agents built for (${targetAudience}):\n\n✨ **Instant 24/7 Customer Support** with zero delay.\n🤖 **Automated Sales & Appointment Booking** directly on WhatsApp & Facebook.\n📊 **Seamless CRM Integration** and lead management.\n💡 **Cut Support Costs by up to 80%**.\n\n👇 **How to get started?**\nComment **"INFO"** or send us a Direct Message to get instant access and a free demo link! 📩⚡\n\n#AIAgents #DigitalMarketing #Automation #${platform}`;
-
-    return res.json({
-      success: true,
-      postContent: generatedPostContent,
-      ...bestTimeObj
+    return res.status(503).json({
+      success: false,
+      code: "AI_PROVIDER_UNAVAILABLE",
+      error: isAr
+        ? "مولد المحتوى التسويقي غير متاح حالياً: لم يتم تهيئة مزود ذكاء اصطناعي حقيقي على بيئة التشغيل."
+        : "Marketing content generation is unavailable: no real AI provider is configured in this environment.",
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
