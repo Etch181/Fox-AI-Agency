@@ -156,9 +156,15 @@ export const ClientIntegrations: React.FC = () => {
                   if (!integration.connected) {
                     try {
                       const res = await fetch("/api/integrations/instagram/connect", { method: "GET", credentials: "include" });
-                      const data = await res.json();
-                      if (data.authUrl) window.open(data.authUrl, "_blank", "noopener,noreferrer");
-                    } catch (e) {
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok || !data.authUrl) {
+                        const reason = data?.error || data?.message || (isAr ? "تكامل Instagram غير مهيأ على الخادم." : "Instagram integration is not configured on the server.");
+                        alert(isAr ? `تعذر ربط Instagram: ${reason}` : `Instagram connection unavailable: ${reason}`);
+                        return;
+                      }
+                      window.open(data.authUrl, "_blank", "noopener,noreferrer");
+                    } catch (e: any) {
+                      alert(isAr ? "تعذر بدء ربط Instagram. راجع إعدادات Meta أولاً." : "Could not start Instagram connection. Check Meta configuration first.");
                       console.warn("Instagram connect failed:", e);
                     }
                   } else {
@@ -201,8 +207,11 @@ export const ClientIntegrations: React.FC = () => {
         <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 mb-4 max-w-2xl">
           {isAr ? "هل تستخدم نظاماً داخلياً (ERP) أو CRM خاص؟ يمكنك ربط نظامك عبر Webhook لاستقبال وتحديث البيانات لحظياً." : "Using an internal ERP or custom CRM? Connect your system via Webhook to receive and update data in real-time."}
         </p>
-        <button className="px-5 py-2.5 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition">
-          {isAr ? "إعداد Webhook مخصص" : "Setup Custom Webhook"}
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("fox:navigate", { detail: { tab: "client_n8n" } }))}
+          className="px-5 py-2.5 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition"
+        >
+          {isAr ? "فتح مركز أتمتة n8n" : "Open n8n Automation Center"}
         </button>
       </div>
     </div>

@@ -241,6 +241,16 @@ export const ClientN8n: React.FC = () => {
       return;
     }
 
+    if (n8nRealStatus?.status !== "online") {
+      addToast(
+        isAr
+          ? `لا يمكن تنفيذ الاختبار: n8n ${n8nRealStatus?.status === "disabled" ? "معطّل" : "غير مهيأ"}.`
+          : `Test blocked: n8n is ${n8nRealStatus?.status === "disabled" ? "disabled" : "not configured"}.`,
+        "error"
+      );
+      return;
+    }
+
     setIsSending(true);
     const logId = `log_${Math.random().toString(36).substring(2, 9)}`;
 
@@ -268,7 +278,7 @@ export const ClientN8n: React.FC = () => {
         event: parsedPayload.event || selectedPreset,
         targetUrl: webhookUrl.trim() || "/api/n8n/webhook",
         statusCode: resData.statusCode || res.status,
-        durationMs: resData.durationMs || 25,
+        durationMs: typeof resData.durationMs === "number" ? resData.durationMs : 0,
         requestPayload: parsedPayload,
         responsePayload: resData,
         status: res.ok && resData.status !== "failed" && resData.status !== "error" ? "success" : "error",
@@ -548,7 +558,7 @@ export const ClientN8n: React.FC = () => {
             {/* Send Trigger Action Button */}
             <button
               onClick={handleSendWebhook}
-              disabled={isSending || !!jsonError}
+              disabled={isSending || !!jsonError || n8nRealStatus?.status !== "online"}
               className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 py-3.5 text-xs sm:text-sm font-black text-white shadow-lg shadow-amber-500/20 hover:from-amber-600 hover:to-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSending ? (
@@ -559,7 +569,9 @@ export const ClientN8n: React.FC = () => {
               ) : (
                 <>
                   <Send className="h-4 w-4" />
-                  <span>{isAr ? "إرسال وتجربة الـ Webhook الآن" : "Send & Test Webhook Payload"}</span>
+                  <span>{n8nRealStatus?.status === "online"
+                      ? (isAr ? "إرسال وتجربة الـ Webhook الآن" : "Send & Test Webhook Payload")
+                      : (isAr ? "اختبار n8n غير متاح حالياً" : "n8n test unavailable") }</span>
                 </>
               )}
             </button>

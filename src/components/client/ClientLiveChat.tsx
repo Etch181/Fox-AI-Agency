@@ -91,8 +91,14 @@ export const ClientLiveChat: React.FC = () => {
         }),
       });
 
-      const data = await res.json();
-      const reply = data.response || data.aiResponse || (isUserAr ? "أنا هنا لمساعدتك!" : "I am here to help you!");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(data?.error || data?.message || `AI request failed (${res.status})`));
+      }
+      const reply = data.response || data.aiResponse;
+      if (!reply) {
+        throw new Error(isUserAr ? "لم يصل رد فعلي من مزود الذكاء الاصطناعي." : "No real AI provider response was returned.");
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -103,14 +109,13 @@ export const ClientLiveChat: React.FC = () => {
           lang: data.detectedLanguage || (isUserAr ? "ar" : "en"),
         },
       ]);
-    } catch {
+    } catch (error: any) {
+      const message = error?.message || (isUserAr ? "تعذر الحصول على رد فعلي من وكيل الذكاء الاصطناعي." : "The real AI agent did not return a response.");
       setMessages((prev) => [
         ...prev,
         {
           sender: "ai",
-          text: isUserAr
-            ? `شكراً لتواصلك مع ${currentWorkspace.name}! وكيل الذكاء الاصطناعي جاهز ومعد لخدمتك.`
-            : `Thank you for contacting ${currentWorkspace.name}! Our AI agent is configured and ready.`,
+          text: isUserAr ? `⚠️ الاختبار لم ينجح: ${message}` : `⚠️ Test failed: ${message}`,
           time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           lang: isUserAr ? "ar" : "en",
         },
@@ -159,14 +164,14 @@ export const ClientLiveChat: React.FC = () => {
             <MessageSquare className="h-6 w-6 text-emerald-500" />
             <span>
               {isAr
-                ? "مُحاكي القنوات المباشرة (واتساب وتليجرام)"
-                : "Live Channel Simulator (WhatsApp & Telegram)"}
+                ? "معمل اختبار وكيل الذكاء الاصطناعي"
+                : "AI Agent Test Lab"}
             </span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {isAr
-              ? "اختبر استجابة وكيل Gemini AI الذكي باللغتين العربية والإنجليزي مع التعرّف التلقائي الفوري"
-              : "Test Gemini AI Agent auto-responses in real-time with multi-language auto-detection"}
+              ? "اختبر وكيل الذكاء الاصطناعي الفعلي وبيانات المنشأة بدون أي ردود تجريبية وهمية"
+              : "Test the real AI agent and workspace data with no fabricated fallback responses"}
           </p>
         </div>
 
@@ -241,7 +246,7 @@ export const ClientLiveChat: React.FC = () => {
               <p className="text-[11px] opacity-90 font-medium">
                 {isAr
                   ? `متصل الآن • مدعوم بـ Gemini AI (${channel})`
-                  : `Online • Powered by Gemini AI (${channel})`}
+                  : `Live test • ${channel} channel`}
               </p>
             </div>
           </div>
