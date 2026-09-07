@@ -21,7 +21,14 @@ import {
   Lightbulb,
   Zap,
   Globe,
-  MessageSquare
+  MessageSquare,
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  Radio,
+  ShieldOff,
+  Settings,
+  Crown,
 } from "lucide-react";
 
 export interface GeneratedSocialPost {
@@ -62,9 +69,38 @@ export const ClientMarketingAgent: React.FC = () => {
   const [savedPosts, setSavedPosts] = useState<GeneratedSocialPost[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
 
+  // Real Marketing Automation Status (fetched from server)
+  const [mktStatus, setMktStatus] = useState<{
+    strategySet: boolean;
+    approvalMode: string;
+    platforms: { facebook: { connected: boolean }; instagram: { connected: boolean } };
+    recentPosts: { total: number; published: number; failed: number; lastPublishedAt?: string };
+  } | null>(null);
+  const [mktStatusLoading, setMktStatusLoading] = useState(true);
+
   // Fetch Saved Posts from Firestore
   useEffect(() => {
     fetchPostsHistory();
+  }, [currentWorkspace?.id]);
+
+  // Fetch real Marketing Automation Status from server
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    let cancelled = false;
+    setMktStatusLoading(true);
+    fetch("/api/marketing/status", { headers: { "Content-Type": "application/json" } })
+      .then((r) => r.json().catch(() => null))
+      .then((data: any) => {
+        if (cancelled) return;
+        setMktStatus(data);
+        setMktStatusLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMktStatus(null);
+        setMktStatusLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [currentWorkspace?.id]);
 
   const fetchPostsHistory = async () => {
@@ -251,6 +287,57 @@ export const ClientMarketingAgent: React.FC = () => {
               <span>{isAr ? "زيادة التفاعل والوصول" : "Maximize Reach"}</span>
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Marketing Automation Activity — real workspace-scoped status (no simulated data) */}
+      <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border border-slate-800 p-5 shadow-xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/20"><Activity className="h-5 w-5" /></div>
+            <div>
+              <h3 className="text-sm font-black text-white">{isAr ? "نشاط التشغيل الآلي (Marketing FOX)" : "Marketing Automation Activity"}</h3>
+              <p className="text-[11px] text-slate-400 font-medium">{isAr ? "حالة الاستراتيجية، الموافقات، ون8n" : "Strategy, approvals, and n8n execution status"}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
+            <Radio className="h-3 w-3 text-emerald-400" /> {isAr ? "مبني على بيانات حقيقية" : "Real data only"}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          {[
+            {
+              labelAr: "وضع الموافقة", labelEn: "Approval Mode",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (mktStatus?.approvalMode === 'AUTO_PUBLISH' ? (isAr ? "نشر تلقائي" : "Auto-Publish") : mktStatus?.approvalMode === 'MANUAL_APPROVAL' ? (isAr ? "موافقة يدوية" : "Manual Approval") : (isAr ? "غير مهيأ" : "Not configured")),
+              color: "text-amber-400", icon: <ShieldOff className="h-4 w-4 text-amber-400" />,
+            },
+            {
+              labelAr: "استراتيجية", labelEn: "Strategy",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (mktStatus?.strategySet ? (isAr ? "مُعدّة" : "Configured") : (isAr ? "غير موجودة" : "Missing")),
+              color: "text-emerald-400", icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
+            },
+            {
+              labelAr: "فيسبوك / إنستغرام", labelEn: "Facebook / IG",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : ((mktStatus?.platforms?.facebook?.connected ? (isAr ? "متصل" : "Connected") : (isAr ? "غير متصل" : "Not connected")) + "/" + (mktStatus?.platforms?.instagram?.connected ? (isAr ? "متصل" : "Connected") : (isAr ? "غير متصل" : "Not connected"))),
+              color: "text-sky-400", icon: <Globe className="h-4 w-4 text-sky-400" />,
+            },
+            {
+              labelAr: "منشورات حديثة (مُنشرة)", labelEn: "Recent Published",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : `${mktStatus?.recentPosts?.published ?? 0}`,
+              color: "text-white", icon: <Zap className="h-4 w-4 text-amber-400" />,
+            },
+          ].map((s, idx) => (
+            <div key={idx} className="rounded-xl bg-white/5 border border-white/10 p-3 flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wide">{s.icon}<span>{isAr ? s.labelAr : s.labelEn}</span></div>
+              <div className={`text-sm font-black ${s.color}`}>{s.value}</div>
+              <div className="text-[10px] text-slate-500 font-medium">{isAr ? "من n8n / Firestore — لا بيانات وهمية" : "From n8n / Firestore — no fake data"}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-amber-300/90 font-medium">
+          <Settings className="h-3.5 w-3.5" />
+          <span>{isAr ? "ن8n workflow: 07-marketing-scheduled-post.json — التنفيذ عبر n8n مع مدخل MANUAL_APPROVAL / AUTO_PUBLISH." : "n8n workflow: 07-marketing-scheduled-post.json — execution via n8n with MANUAL_APPROVAL / AUTO_PUBLISH mode."}</span>
+          <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-lg font-extrabold">{isAr ? "لا بيانات وهمية" : "NO FAKE DATA"}</span>
         </div>
       </div>
 

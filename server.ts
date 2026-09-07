@@ -64,6 +64,7 @@ import { TrialLimitManager } from "./src/services/TrialLimitManager";
 import { metaStagingFatalDecision } from "./src/utils/bootDecision";
 import { printEnvValidation } from "./src/utils/envValidation";
 import { instagramIntegrationRouter } from "./src/services/instagramIntegrationRouter";
+import { getMarketingAutomationStatus } from "./src/services/marketingEngineService";
 import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
 import {
   normalizeRegistrationEmail,
@@ -8939,6 +8940,28 @@ app.get(
       planAllows: true,
       message: "n8n integration is online and ready",
     });
+  })
+);
+
+
+
+// ============================================================
+// Marketing Automation Status — real workspace-scoped status for Marketing FOX
+// ============================================================
+app.get(
+  "/api/marketing/status",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("marketing automation status", async (req, res) => {
+    const { workspaceId } = (req as any).user || {};
+    if (!workspaceId) {
+      return res.status(401).json({ error: "unauthenticated" });
+    }
+    const trusted = resolveTrustedWorkspace(String(workspaceId));
+    if (!trusted) {
+      return res.status(403).json({ error: "workspace not found" });
+    }
+    const status = await getMarketingAutomationStatus(trusted.id);
+    return res.status(200).json(status);
   })
 );
 

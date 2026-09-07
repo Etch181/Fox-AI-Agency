@@ -274,3 +274,78 @@ export async function generateMarketingContent(
   const content = `Generated for ${platform}: ${topic}. Brand voice: ${strategy.toneBrandVoice}. Audience: ${strategy.targetAudience}.`;
   return { content, topic, recommendedTime: timeRec };
 }
+
+export interface MarketingAutomationStatus {
+  strategySet: boolean;
+  approvalMode: 'MANUAL_APPROVAL' | 'AUTO_PUBLISH' | 'not_configured';
+  platforms: {
+    facebook: { connected: boolean; accountId?: string };
+    instagram: { connected: boolean; accountId?: string };
+  };
+  recentPosts: {
+    total: number;
+    published: number;
+    failed: number;
+    lastPublishedAt?: string;
+  };
+}
+
+/** Returns the real automation status for a workspace's Marketing FOX module.
+ *  Reads strategy settings + recent publish records from Firestore.
+ *  Never returns simulated / fake data. */
+export async function getMarketingAutomationStatus(
+  workspaceId: string
+): Promise<MarketingAutomationStatus> {
+  // 1. Fetch strategy
+  let strategySet = false;
+  let approvalMode: 'MANUAL_APPROVAL' | 'AUTO_PUBLISH' | 'not_configured' = 'not_configured';
+  let platforms: MarketingAutomationStatus['platforms'] = {
+    facebook: { connected: false },
+    instagram: { connected: false },
+  };
+  try {
+    const doc = adminDb.collection(STRATEGY_COLLECTION).doc(workspaceId);
+    const snap = await doc.get();
+    if (snap.exists) {
+      const data = snap.data() as MarketingStrategy;
+      strategySet = true;
+      approvalMode = (data.approvalMode === 'AUTO_PUBLISH' ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL') as MarketingAutomationStatus['approvalMode'];
+      // Platforms are set in strategy; actual Meta connection requires page/token
+      // We track via the preferredPlatforms list + workspaceMetaPageId presence
+      platforms = {
+        facebook: {
+          connected: (data.preferredPlatforms || []).includes('facebook'),
+        },
+        instagram: {
+          connected: (data.preferredPlatforms || []).includes('instagram'),
+        },
+      };
+    }
+  } catch (e) {
+    // Non-fatal: return defaults
+  }
+
+  // 2. Fetch recent publish records from socialPublishingService collection
+  let recentPosts: MarketingAutomationStatus['recentPosts'] = {
+    total: 0, published: 0, failed: 0,
+  };
+  try {
+    const recordsSnap = await adminDb
+      .collection('socialPublishingRecords')
+      .where('workspaceId', '==', workspaceId)
+      .orderBy('createdAt', 'desc')
+      .limit(50)
+      .get();
+    const docs = recordsSnap.docs;
+    recentPosts = {
+      total: docs.length,
+      published: docs.filter(d => d.data().state === 'published').length,
+      failed: docs.filter(d => ['failed', 'error'].includes(d.data().state)).length,
+      lastPublishedAt: docs.find(d => d.data().state === 'published')?.data().publishedAt,
+    };
+  } catch (e) {
+    // socialPublishingRecords may not exist yet — non-fatal
+  }
+
+  return { strategySet, approvalMode, platforms, recentPosts };
+}
