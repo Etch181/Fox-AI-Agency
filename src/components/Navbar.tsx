@@ -14,14 +14,16 @@ import {
   Zap,
   Globe,
   Compass,
+  Menu,
 } from "lucide-react";
 
 interface NavbarProps {
   onOpenLoginModal: () => void;
   onStartTour?: () => void;
+  onOpenMobileSidebar?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour }) => {
+export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour, onOpenMobileSidebar }) => {
   const { t, isAr, toggleLanguage } = useTranslation();
   const {
     currentUser,
@@ -40,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
   const isSuperAdmin = currentUser?.role === "super_admin";
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95 md:px-8">
+    <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95 sm:px-6 md:px-8">
       {/* Toast Overlay */}
       <div className="fixed top-4 ltr:right-4 rtl:left-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
         {toasts.map((toast) => (
@@ -59,17 +61,22 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
         ))}
       </div>
 
+      {/* Mobile Navigation */}
+      <button type="button" onClick={onOpenMobileSidebar} className="mr-2 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-700 shadow-sm transition hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-200 md:hidden" aria-label={isAr ? "فتح القائمة" : "Open navigation"}>
+        <Menu className="h-5 w-5" />
+      </button>
+
       {/* Brand Identity - Professional Polish */}
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-slate-900/5 dark:bg-white/5 border border-slate-200/60 dark:border-slate-700/60 shadow-sm overflow-hidden shrink-0">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex h-9 w-9 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-slate-900/5 dark:bg-white/5 border border-slate-200/60 dark:border-slate-700/60 shadow-sm overflow-hidden shrink-0">
           <img src="/logo.png" alt="Fox AI Agency Logo" className="h-full w-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement!.innerHTML = '<svg class="h-6 w-6 sm:h-7 sm:w-7 stroke-[2.2] text-orange-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>'; }} />
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-extrabold tracking-tight text-slate-900 dark:text-white text-lg">
+            <span className="font-extrabold tracking-tight text-slate-900 dark:text-white text-[13px] sm:text-lg whitespace-nowrap">
               FOX AI <span className="text-orange-500">AGENCY</span>
             </span>
-            <span className="rounded-md bg-orange-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-orange-600 dark:text-orange-400 border border-orange-500/20">
+            <span className="hidden sm:inline-block rounded-md bg-orange-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-orange-600 dark:text-orange-400 border border-orange-500/20">
               PRO
             </span>
           </div>
@@ -80,16 +87,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
       </div>
 
       {/* Workspace Switcher & User Profile Controls */}
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-1 sm:gap-3">
         {/* Workspace Display / Switcher */}
         {isSuperAdmin ? (
           <div className="relative">
             <button
               onClick={() => setWorkspaceMenuOpen(!workspaceMenuOpen)}
-              className="flex items-center gap-2 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-xs font-bold text-orange-600 dark:text-orange-400 hover:bg-orange-500/20 transition"
+              className="flex items-center gap-1 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-xs font-bold text-orange-600 dark:text-orange-400 hover:bg-orange-500/20 transition"
             >
               <ShieldAlert className="h-4 w-4 text-orange-500" />
-              <span className="max-w-[130px] truncate sm:max-w-[180px]">
+              <span className="hidden sm:block max-w-[130px] truncate sm:max-w-[180px]">
                 {isAr ? "👑 مالك الوكالة (سوبر أدمين)" : "👑 Agency Owner (Super Admin)"}
               </span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
@@ -185,7 +192,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
         {onStartTour && (
           <button
             onClick={onStartTour}
-            className="flex h-9 items-center gap-1.5 px-2.5 sm:px-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-xs transition hover:bg-amber-500/20 shadow-2xs cursor-pointer"
+            className="hidden sm:flex h-9 items-center gap-1.5 px-2.5 sm:px-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-xs transition hover:bg-amber-500/20 shadow-2xs cursor-pointer"
             title={isAr ? "بدء الجولة التعريفية التفاعلية" : "Start Guided Tour"}
           >
             <Compass className="h-4 w-4 text-amber-500 animate-spin-slow shrink-0" />
@@ -196,17 +203,17 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
         {/* Language Switcher */}
         <button
           onClick={toggleLanguage}
-          className="flex h-9 items-center gap-1.5 px-3 rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 font-black text-xs transition hover:bg-orange-500/20 shadow-2xs cursor-pointer"
+          className="flex h-9 items-center gap-1 px-2 sm:gap-1.5 sm:px-3 rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 font-black text-xs transition hover:bg-orange-500/20 shadow-2xs cursor-pointer"
           title={isAr ? "Switch to English" : "التحويل للغة العربية"}
         >
           <Globe className="h-4 w-4 text-orange-500" />
-          <span className="font-bold">{isAr ? "English" : "العربية"}</span>
+          <span className="font-bold hidden sm:inline">{isAr ? "English" : "العربية"}</span>
         </button>
 
         {/* User-Accessible Theme Toggle (Light / Dark Mode) */}
         <button
           onClick={() => setDarkMode(!darkMode)}
-          className="flex h-9 items-center gap-1.5 px-2.5 sm:px-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 transition-all hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-800/90 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white shadow-2xs cursor-pointer"
+          className="hidden sm:flex h-9 items-center gap-1.5 px-2.5 sm:px-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 transition-all hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-800/90 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white shadow-2xs cursor-pointer"
           title={isAr ? (darkMode ? "تفعيل المظهر الفاتح (Light Mode)" : "تفعيل المظهر الداكن (Dark Mode)") : (darkMode ? "Switch to Light Mode" : "Switch to Dark Mode")}
           aria-label={isAr ? "تبديل المظهر" : "Toggle Theme"}
         >
@@ -226,14 +233,14 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenLoginModal, onStartTour })
         {/* Role Switcher / Account Settings */}
         <button
           onClick={onOpenLoginModal}
-          className="flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-800 px-3.5 py-2 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+          className="flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-800 px-2 sm:px-3.5 py-2 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
         >
           <UserCheck className="h-3.5 w-3.5 text-slate-500" />
           <span className="hidden sm:inline">{isAr ? "الحساب" : "Account"}</span>
         </button>
         <button
           onClick={logout}
-          className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-orange-600/20 hover:bg-orange-500 transition"
+          className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-2 sm:px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-orange-600/20 hover:bg-orange-500 transition"
         >
           <LogOut className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">{isAr ? "تسجيل الخروج" : "Logout"}</span>

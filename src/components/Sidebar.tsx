@@ -43,9 +43,11 @@ export type { ViewTab } from "../security/appAuthorization";
 interface SidebarProps {
   activeTab: ViewTab;
   setActiveTab: (tab: ViewTab) => void;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMobileOpen = false, onCloseMobile }) => {
   const { t, isAr, dir } = useTranslation();
   const { currentUser, currentWorkspace, supportTickets } = useApp();
   const isSuperAdmin = currentUser?.role === "super_admin";
@@ -118,9 +120,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   };
 
   return (
-    <aside
-      className="w-64 shrink-0 ltr:border-r rtl:border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900 flex flex-col justify-between py-6 px-4 min-h-[calc(100vh-4rem)]"
-    >
+    <>
+      {isMobileOpen && (
+        <button type="button" aria-label={isAr ? "إغلاق القائمة" : "Close navigation"} onClick={onCloseMobile} className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-[2px] md:hidden" />
+      )}
+      <aside
+        className={`fixed inset-y-0 z-50 w-[min(86vw,320px)] shrink-0 overflow-y-auto border-slate-200 bg-slate-50 px-4 py-6 shadow-2xl transition-transform duration-300 dark:border-slate-800 dark:bg-slate-900 md:static md:z-auto md:w-64 md:translate-x-0 md:shadow-none md:min-h-[calc(100vh-4rem)] ltr:border-r rtl:border-l ${isMobileOpen ? "ltr:translate-x-0 rtl:translate-x-0" : "ltr:-translate-x-full rtl:translate-x-full"}`}>
       <div className="space-y-6">
         {/* Current Context / User Badge */}
         <div data-tour="tour-workspace-header" className="bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5">
@@ -717,6 +722,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           </div>
         );
       })()}
-    </aside>
+      </aside>
+    </>
   );
 };

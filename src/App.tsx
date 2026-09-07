@@ -286,6 +286,7 @@ const AppContent: React.FC = () => {
   }, [navigateTo]);
 
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isTourManualOpen, setIsTourManualOpen] = useState(false);
 
   React.useEffect(() => {
@@ -551,11 +552,17 @@ const AppContent: React.FC = () => {
       <div>
         <Navbar
           onOpenLoginModal={() => setIsLoginModalOpen(true)}
+          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
           onStartTour={() => setIsTourManualOpen(true)}
         />
 
         <div className="flex">
-          <Sidebar activeTab={activeTab} setActiveTab={navigateTo} />
+          <Sidebar
+            activeTab={activeTab}
+            setActiveTab={(tab) => { navigateTo(tab); setIsMobileSidebarOpen(false); }}
+            isMobileOpen={isMobileSidebarOpen}
+            onCloseMobile={() => setIsMobileSidebarOpen(false)}
+          />
           <main className="flex-1 p-3 sm:p-6 lg:p-8 w-full max-w-[1750px] mx-auto overflow-x-hidden space-y-5 sm:space-y-6">
             <Breadcrumbs activeTab={activeTab} onNavigate={navigateTo} />
             {renderMainView()}
