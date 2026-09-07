@@ -252,9 +252,7 @@ const AppContent: React.FC = () => {
     return true;
   }, [currentWorkspace?.industry]);
 
-  const activeTab: ViewTab = currentUser
-    ? resolveAuthorizedView(currentUser.role, requestedView)
-    : "client_dashboard";
+  const activeTab: ViewTab = currentUser ? resolveAuthorizedView(currentUser.role, requestedView) : "client_dashboard";
   const industrySafeActiveTab: ViewTab = isIndustryViewAllowed(activeTab)
     ? activeTab
     : "client_dashboard";
@@ -263,7 +261,10 @@ const AppContent: React.FC = () => {
     (requested: unknown) => {
       if (!currentUser) return;
 
-      const authorized = resolveAuthorizedView(currentUser.role, requested);
+      const authorized = resolveAuthorizedView(
+        currentUser.role,
+        requested,
+      );
       setRequestedView(authorized);
       localStorage.setItem("fox_active_view", authorized);
       if (!isIndustryViewAllowed(authorized)) {
@@ -309,7 +310,10 @@ const AppContent: React.FC = () => {
   React.useEffect(() => {
     if (!currentUser) return;
 
-    const authorized = resolveAuthorizedView(currentUser.role, requestedView);
+    const authorized = resolveAuthorizedView(
+      currentUser.role,
+      requestedView,
+    );
     if (authorized !== requestedView) {
       setRequestedView(authorized);
     }
