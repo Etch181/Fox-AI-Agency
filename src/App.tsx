@@ -253,20 +253,20 @@ const AppContent: React.FC = () => {
   }, [currentWorkspace?.industry]);
 
   const activeTab: ViewTab = currentUser
-    ? (() => {
-        const resolved = resolveAuthorizedView(currentUser.role, requestedView);
-        return isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
-      })()
+    ? resolveAuthorizedView(currentUser.role, requestedView)
+    : "client_dashboard";
+  const industrySafeActiveTab: ViewTab = isIndustryViewAllowed(activeTab)
+    ? activeTab
     : "client_dashboard";
 
   const navigateTo = React.useCallback(
     (requested: unknown) => {
       if (!currentUser) return;
 
-      const resolved = resolveAuthorizedView(currentUser.role, requested);
-      const authorized = isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
-      setRequestedView(authorized);
-      localStorage.setItem("fox_active_view", authorized);
+      const authorized = resolveAuthorizedView(currentUser.role, requested);
+      const industryAuthorized = isIndustryViewAllowed(authorized) ? authorized : "client_dashboard";
+      setRequestedView(industryAuthorized);
+      localStorage.setItem("fox_active_view", industryAuthorized);
     },
     [currentUser, isIndustryViewAllowed],
   );
@@ -306,12 +306,12 @@ const AppContent: React.FC = () => {
   React.useEffect(() => {
     if (!currentUser) return;
 
-    const resolved = resolveAuthorizedView(currentUser.role, requestedView);
-    const authorized = isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
-    if (authorized !== requestedView) {
-      setRequestedView(authorized);
+    const authorized = resolveAuthorizedView(currentUser.role, requestedView);
+    const industryAuthorized = isIndustryViewAllowed(authorized) ? authorized : "client_dashboard";
+    if (industryAuthorized !== requestedView) {
+      setRequestedView(industryAuthorized);
     }
-    localStorage.setItem("fox_active_view", authorized);
+    localStorage.setItem("fox_active_view", industryAuthorized);
   }, [currentUser, requestedView, isIndustryViewAllowed]);
 
   if (!authHydrated) {
@@ -349,7 +349,7 @@ const AppContent: React.FC = () => {
   }
 
   const renderMainView = () => {
-    switch (activeTab) {
+    switch (industrySafeActiveTab) {
       // Super Admin Views
       case "admin_dashboard":
         return <AdminDashboard onNavigate={navigateTo} />;
@@ -570,20 +570,20 @@ const AppContent: React.FC = () => {
 
         <div className="flex">
           <Sidebar
-            activeTab={activeTab}
+            activeTab={industrySafeActiveTab}
             setActiveTab={(tab) => { navigateTo(tab); setIsMobileSidebarOpen(false); }}
             isMobileOpen={isMobileSidebarOpen}
             onCloseMobile={() => setIsMobileSidebarOpen(false)}
           />
           <main className="flex-1 p-3 sm:p-6 lg:p-8 w-full max-w-[1750px] mx-auto overflow-x-hidden space-y-5 sm:space-y-6">
-            <Breadcrumbs activeTab={activeTab} onNavigate={navigateTo} />
+            <Breadcrumbs activeTab={industrySafeActiveTab} onNavigate={navigateTo} />
             {renderMainView()}
           </main>
         </div>
 
         {/* Guided Onboarding Tour Walkthrough */}
         <OnboardingTour
-          activeTab={activeTab}
+          activeTab={industrySafeActiveTab}
           setActiveTab={navigateTo}
           isOpenManual={isTourManualOpen}
           onCloseManual={() => setIsTourManualOpen(false)}
