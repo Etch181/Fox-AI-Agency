@@ -7396,8 +7396,8 @@ const INTEGRATION_FLAGS = {
 };
 
 // Telegram Polling Engine for Real-Time Telegram Response
-let isBotEnabled =
-  INTEGRATION_FLAGS.telegram && INTEGRATION_FLAGS.agencyTelegramPolling;
+let isBotEnabled = INTEGRATION_FLAGS.telegram;
+let isAgencyWebhookActive = false;
 let isPollingActive = false;
 let lastUpdateOffset = 0;
 
@@ -7468,6 +7468,39 @@ async function startTelegramPolling() {
   };
 
   pollLoop();
+}
+
+async function configureAgencyTelegramWebhook() {
+  if (!isBotEnabled || !activeTelegramToken) {
+    isAgencyWebhookActive = false;
+    return false;
+  }
+
+  const baseUrl = getFoxPublicBaseUrl();
+  if (!baseUrl) {
+    console.warn("[Agency Telegram] Public base URL is not configured; webhook cannot be activated.");
+    isAgencyWebhookActive = false;
+    return false;
+  }
+
+  const secretToken = createHash("sha256")
+    .update(activeTelegramToken)
+    .digest("hex");
+
+  const result = await callTelegramApi("setWebhook", {
+    url: `${baseUrl}/api/telegram/webhook`,
+    secret_token: secretToken,
+    allowed_updates: ["message"],
+    drop_pending_updates: false,
+  });
+
+  isAgencyWebhookActive = Boolean(result?.ok);
+  if (isAgencyWebhookActive) {
+    console.log("[Agency Telegram] Webhook configured successfully.");
+  } else {
+    console.warn("[Agency Telegram] Webhook configuration failed:", result?.description || "unknown error");
+  }
+  return isAgencyWebhookActive;
 }
 
 // Agency Telegram polling starts from startServer()
@@ -8257,11 +8290,11 @@ app.post(
   authenticateFirebaseRequest,
   requireSuperAdmin,
   async (req, res) => {
-  if (!INTEGRATION_FLAGS.agencyTelegramPolling) {
+  if (!INTEGRATION_FLAGS.telegram) {
     return res.status(409).json({
       success: false,
-      code: "AGENCY_TELEGRAM_POLLING_DISABLED",
-      error: "Legacy agency polling requires ENABLE_AGENCY_TELEGRAM_POLLING=true",
+      code: "AGENCY_TELEGRAM_DISABLED",
+      error: "Telegram integration is disabled by configuration.",
     });
   }
   const { enabled } = req.body;
@@ -8272,11 +8305,10 @@ app.post(
   }
 
   if (isBotEnabled) {
-    if (!isPollingActive && activeTelegramToken) {
-      startTelegramPolling();
-    }
+    await configureAgencyTelegramWebhook();
   } else {
-    isPollingActive = false;
+    isAgencyWebhookActive = false;
+    await callTelegramApi("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
   }
 
   return res.json({
@@ -8297,15 +8329,19 @@ app.get(
   async (req, res) => {
   const data = await callTelegramApi("getMe");
   if (data && data.ok) {
-    // Ensure polling is active if bot is enabled
-    await callTelegramApi("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
-    if (!isPollingActive && isBotEnabled) startTelegramPolling();
+    const webhookInfo = await callTelegramApi("getWebhookInfo");
+    const configuredUrl = `${getFoxPublicBaseUrl()}/api/telegram/webhook`;
+    const webhookActive = Boolean(webhookInfo?.ok && webhookInfo.result?.url === configuredUrl);
 
     return res.json({
       connected: true,
       botInfo: data.result,
       botEnabled: isBotEnabled,
-      pollingActive: isPollingActive && isBotEnabled,
+      pollingActive: false,
+      webhookActive,
+      webhookUrl: webhookActive ? configuredUrl : null,
+      pendingUpdates: webhookInfo?.result?.pending_update_count || 0,
+      lastWebhookError: webhookInfo?.result?.last_error_message || null,
     });
   } else {
     return res.json({
@@ -8365,10 +8401,9 @@ app.post(
     isPollingActive = false;
     lastUpdateOffset = 0;
 
-    setTimeout(
-      () => startTelegramPolling(),
-      500
-    );
+    setTimeout(() => {
+      void configureAgencyTelegramWebhook();
+    }, 250);
 
     return res.json({
       success: true,
@@ -8417,6 +8452,19 @@ app.post(
 
 // Telegram Webhook Endpoint
 app.post("/api/telegram/webhook", async (req, res) => {
+  if (!isBotEnabled || !isAgencyWebhookActive) {
+    return res.status(503).json({ ok: false, code: "AGENCY_TELEGRAM_DISABLED" });
+  }
+
+  const expectedSecret = createHash("sha256")
+    .update(activeTelegramToken)
+    .digest("hex");
+  const receivedSecret = String(req.header("X-Telegram-Bot-Api-Secret-Token") || "");
+  if (!receivedSecret || receivedSecret.length !== expectedSecret.length ||
+      !timingSafeEqual(Buffer.from(receivedSecret), Buffer.from(expectedSecret))) {
+    return res.status(401).json({ ok: false, code: "INVALID_TELEGRAM_WEBHOOK_SECRET" });
+  }
+
   const update = req.body;
   if (update && update.message && update.message.chat) {
     const chatId = String(update.message.chat.id);
@@ -9194,11 +9242,8 @@ async function startServer() {
     );
   }
 
-  if (
-    activeTelegramToken &&
-    isBotEnabled
-  ) {
-    startTelegramPolling();
+  if (activeTelegramToken && isBotEnabled) {
+    await configureAgencyTelegramWebhook();
   }
 
   // --------------------------------------------------------

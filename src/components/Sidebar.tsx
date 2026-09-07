@@ -391,15 +391,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
           </button>
           )}
 
-          {(isSuperAdmin ||
-            (
+          {(
               canUse("appointments") &&
               (
                 industry === "Clinic" ||
                 industry === "Restaurant" ||
                 industry === "Course Center"
               )
-            )) && (
+            ) && (
             <button
               onClick={() => setActiveTab("client_appointments")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
@@ -409,7 +408,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
               }`}
             >
               <Calendar className="h-4 w-4" />
-              <span>{isAr ? "جدول الحجوزات الطبية" : "Appointments"}</span>
+              <span>{isAr ? (industry === "Clinic" ? "الحجوزات الطبية" : industry === "Restaurant" ? "حجوزات المطعم" : "جدول الحصص والتسجيلات") : "Appointments & Bookings"}</span>
             </button>
           )}
 
@@ -427,7 +426,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
           </button>
           )}
 
-          {(isSuperAdmin || industry === "Pharmacy" || industry === "Retail" || industry === "Restaurant") && (
+          {(industry === "Pharmacy" || industry === "Retail" || industry === "Restaurant") && (
             <button
               onClick={() => setActiveTab("client_order_verification")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
@@ -713,9 +712,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
                 </span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-500 dark:text-slate-400 font-medium">Gemini AI</span>
-                <span className="bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-full font-bold text-[10px]">
-                  {isAr ? "متصل 3.6 Flash" : "Connected 3.6 Flash"}
+                <span className="text-slate-500 dark:text-slate-400 font-medium">AI Provider</span>
+                <span className="bg-slate-500/10 text-slate-400 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                  {isAr ? "حالة فعلية فقط" : "Live status only"}
                 </span>
               </div>
             </div>

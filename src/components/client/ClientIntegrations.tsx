@@ -51,13 +51,14 @@ export const ClientIntegrations: React.FC = () => {
       }
     ],
     ecommerce: [
-      { id: "salla", name: "Salla (سلة)", icon: <ShoppingBag className="h-6 w-6 text-teal-500"/>, connected: false, desc: isAr ? "ربط متجر سلة لمزامنة المنتجات والطلبات" : "Connect Salla store to sync products & orders" },
-      { id: "zid", name: "Zid (زد)", icon: <ShoppingBag className="h-6 w-6 text-purple-500"/>, connected: false, desc: isAr ? "ربط متجر زد لمزامنة المنتجات والطلبات" : "Connect Zid store to sync products & orders" },
-      { id: "shopify", name: "Shopify", icon: <ShoppingBag className="h-6 w-6 text-green-500"/>, connected: false, desc: isAr ? "ربط Shopify لمزامنة المخزون" : "Connect Shopify for inventory sync" },
+      { id: "salla", name: "Salla (سلة)", icon: <ShoppingBag className="h-6 w-6 text-teal-500"/>, connected: false, unavailableReason: "SALLA_INTEGRATION_NOT_CONFIGURED", desc: isAr ? "تكامل سلة لم تتم تهيئته بعد — لن نعرضه كأنه متصل" : "Salla integration is not configured yet — it will not be shown as connected" },
+      { id: "zid", name: "Zid (زد)", icon: <ShoppingBag className="h-6 w-6 text-purple-500"/>, connected: false, unavailableReason: "ZID_INTEGRATION_NOT_CONFIGURED", desc: isAr ? "تكامل زد لم تتم تهيئته بعد — لن نعرضه كأنه متصل" : "Zid integration is not configured yet — it will not be shown as connected" },
+      { id: "shopify", name: "Shopify", icon: <ShoppingBag className="h-6 w-6 text-green-500"/>, connected: false, unavailableReason: "SHOPIFY_INTEGRATION_NOT_CONFIGURED", desc: isAr ? "تكامل Shopify لم تتم تهيئته بعد — لن نعرضه كأنه متصل" : "Shopify integration is not configured yet — it will not be shown as connected" },
     ]
   };
 
-  const displayList = activeTab === "messaging" ? integrations.messaging : integrations.ecommerce;
+  const ecommerceSupported = ["Retail", "Small Business"].includes(currentWorkspace.industry);
+  const displayList = activeTab === "messaging" ? integrations.messaging : ecommerceSupported ? integrations.ecommerce : [];
 
   type IntegrationItem = {
     id: string;
@@ -103,12 +104,12 @@ export const ClientIntegrations: React.FC = () => {
         >
           {isAr ? "قنوات المحادثة" : "Messaging Channels"}
         </button>
-        <button
+        {ecommerceSupported && <button
           onClick={() => setActiveTab("ecommerce")}
           className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors ${activeTab === "ecommerce" ? "border-indigo-500 text-indigo-600 dark:text-indigo-400" : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
         >
           {isAr ? "المتاجر الإلكترونية" : "E-Commerce"}
-        </button>
+        </button>}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -137,7 +138,9 @@ export const ClientIntegrations: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">{integration.desc}</p>
               {integration.unavailableReason && (
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-3 leading-relaxed font-medium">
-                  ⚠ {isAr ? "يتطلب إعداد Meta App ID خارجي — غير متاح حالياً" : "Requires external Meta App ID setup — not available currently"}
+                  ⚠ {integration.id === "messenger"
+                    ? (isAr ? "يتطلب إعداد Meta App ID خارجي — غير متاح حالياً" : "Requires external Meta App ID setup — not available currently")
+                    : (isAr ? "التكامل غير مهيأ على الخادم حالياً" : "Integration is not configured on the server yet")}
                 </p>
               )}
             </div>
@@ -147,6 +150,8 @@ export const ClientIntegrations: React.FC = () => {
                 if (integration.unavailableReason) return;
                 if (integration.id === "whatsapp") {
                   setShowWhatsAppQR(true);
+                } else if (integration.id === "telegram") {
+                  window.dispatchEvent(new CustomEvent("fox:navigate", { detail: { tab: "client_telegram" } }));
                 } else if (integration.id === "instagram") {
                   if (!integration.connected) {
                     try {

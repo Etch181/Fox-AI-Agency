@@ -235,26 +235,40 @@ const AppContent: React.FC = () => {
     authHydrated,
     workspacesLoading,
     workspacesError,
+    currentWorkspace,
   } = useApp();
   const [requestedView, setRequestedView] = useState<unknown>(() =>
     localStorage.getItem("fox_active_view") || "",
   );
+  const isIndustryViewAllowed = React.useCallback((view: ViewTab) => {
+    const industry = currentWorkspace?.industry;
+    if (!industry) return true;
+    if (view === "client_order_verification") {
+      return ["Pharmacy", "Retail", "Restaurant"].includes(industry);
+    }
+    if (view === "client_appointments") {
+      return ["Clinic", "Restaurant", "Course Center"].includes(industry);
+    }
+    return true;
+  }, [currentWorkspace?.industry]);
+
   const activeTab: ViewTab = currentUser
-    ? resolveAuthorizedView(currentUser.role, requestedView)
+    ? (() => {
+        const resolved = resolveAuthorizedView(currentUser.role, requestedView);
+        return isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
+      })()
     : "client_dashboard";
 
   const navigateTo = React.useCallback(
     (requested: unknown) => {
       if (!currentUser) return;
 
-      const authorized = resolveAuthorizedView(
-        currentUser.role,
-        requested,
-      );
+      const resolved = resolveAuthorizedView(currentUser.role, requested);
+      const authorized = isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
       setRequestedView(authorized);
       localStorage.setItem("fox_active_view", authorized);
     },
-    [currentUser],
+    [currentUser, isIndustryViewAllowed],
   );
 
   useEffect(() => {
@@ -292,15 +306,13 @@ const AppContent: React.FC = () => {
   React.useEffect(() => {
     if (!currentUser) return;
 
-    const authorized = resolveAuthorizedView(
-      currentUser.role,
-      requestedView,
-    );
+    const resolved = resolveAuthorizedView(currentUser.role, requestedView);
+    const authorized = isIndustryViewAllowed(resolved) ? resolved : "client_dashboard";
     if (authorized !== requestedView) {
       setRequestedView(authorized);
     }
     localStorage.setItem("fox_active_view", authorized);
-  }, [currentUser, requestedView]);
+  }, [currentUser, requestedView, isIndustryViewAllowed]);
 
   if (!authHydrated) {
     return (
@@ -589,15 +601,15 @@ const AppContent: React.FC = () => {
             Firebase Firestore Active
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-            Gemini 2.5 AI Latency: 42ms
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+            AI telemetry: live data only
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
-            n8n Webhook Active
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+            n8n: runtime status only
           </span>
         </div>
-        <div>© 2025 Fox AI Agency SaaS</div>
+        <div>© {new Date().getFullYear()} Fox AI Agency SaaS</div>
       </footer>
 
       <LoginModal
