@@ -208,10 +208,8 @@ export const ClientIntegrations: React.FC = () => {
           {isAr ? "هل تستخدم نظاماً داخلياً (ERP) أو CRM خاص؟ يمكنك ربط نظامك عبر Webhook لاستقبال وتحديث البيانات لحظياً." : "Using an internal ERP or custom CRM? Connect your system via Webhook to receive and update data in real-time."}
         </p>
         <button
-          onClick={() => window.dispatchEvent(new CustomEvent("fox:navigate", { detail: { tab: "client_n8n" } }))}
           className="px-5 py-2.5 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition"
         >
-          {isAr ? "فتح مركز أتمتة n8n" : "Open n8n Automation Center"}
         </button>
       </div>
     </div>

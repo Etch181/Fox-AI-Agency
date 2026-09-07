@@ -40,8 +40,8 @@ export const FoxAgentLivePanel: React.FC = () => {
     </div>
 
     <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {agents.map(agent=>{const ok=agent.status==="active"&&agent.lastExecutionStatus!=="failed"; return <div key={agent.id} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
-        <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black text-slate-900 dark:text-white">{agent.name}</p><p className="mt-1 text-[10px] font-bold uppercase text-slate-400">{agent.role}</p></div><span className={`rounded-full px-2 py-1 text-[9px] font-black ${ok?"bg-emerald-500/10 text-emerald-600":"bg-rose-500/10 text-rose-600"}`}>{ok?(isAr?"نشط":"ACTIVE"):(isAr?"مشكلة":"ATTENTION")}</span></div>
+      {agents.map(agent=>{const hasExecution=Boolean(agent.lastExecutionAt); const failed=agent.lastExecutionStatus==="failed"; const ok=agent.status==="active"&&!failed; return <div key={agent.id} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+        <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black text-slate-900 dark:text-white">{agent.name}</p><p className="mt-1 text-[10px] font-bold uppercase text-slate-400">{agent.role}</p></div><span className={`rounded-full px-2 py-1 text-[9px] font-black ${failed?"bg-rose-500/10 text-rose-600":hasExecution&&ok?"bg-emerald-500/10 text-emerald-600":"bg-sky-500/10 text-sky-600"}`}>{failed?(isAr?"فشل":"FAILED"):hasExecution&&ok?(isAr?"نشط":"ACTIVE"):(isAr?"جاهز":"READY")}</span></div>
         <p className="mt-3 min-h-8 text-[11px] leading-5 text-slate-500">{agent.description}</p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]"><div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-800"><span className="text-slate-400">{isAr?"نجاح":"Success"}</span><b className="ml-1 text-emerald-600">{agent.successCount}</b></div><div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-800"><span className="text-slate-400">{isAr?"فشل":"Failed"}</span><b className="ml-1 text-rose-600">{agent.failureCount}</b></div></div>
       </div>})}

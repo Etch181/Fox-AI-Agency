@@ -149,7 +149,7 @@ export async function processScheduledPost(
   // Entitlement check (load real workspace from Firestore)
   const wsSnap = await adminDb.collection('workspaces').doc(workspaceId).get();
   const workspace = wsSnap.exists ? (wsSnap.data() as Workspace) : null;
-  const feature: FoxFeature = record.platform === 'instagram' ? 'instagram_publish' : 'instagram_messaging';
+  const feature: FoxFeature = 'marketing_engine';
   // For simplicity, both publishing and messaging require entitlement
   const allowed = !!workspace && isWorkspaceEntitlementActive(workspace) && canWorkspaceUseFeature(workspace, feature);
   if (!allowed) {
@@ -182,23 +182,59 @@ export async function processScheduledPost(
     return { success: false, error: 'MAX_ATTEMPTS_EXCEEDED' };
   }
 
-  // Actual publish logic (simulated for architecture; real Meta call preserved from server.ts pattern)
-  // Using existing meta architecture from server.ts (Meta publish endpoint at /api/meta/publish-post)
-  let externalPostId: string | undefined;
+  // Publish only after a real Meta Graph API response. Never synthesize an external ID.
   try {
-    // In production, this calls the existing Meta Graph API path used in server.ts
-    // For Step 4 foundation we record the state transition and external ID structure.
-    externalPostId = `fb_ig_${recordId}_${Date.now()}`;
+    let publishResult: any = null;
+
+    if (record.platform === 'facebook') {
+      const pageId = String(workspace.metaPageId || '').trim();
+      if (!pageId) throw new Error('FACEBOOK_PAGE_ID_MISSING');
+
+      const endpoint = record.imageUrl
+        ? `https://graph.facebook.com/v23.0/${encodeURIComponent(pageId)}/photos`
+        : `https://graph.facebook.com/v23.0/${encodeURIComponent(pageId)}/feed`;
+      const body = record.imageUrl
+        ? { url: record.imageUrl, caption: record.content, published: true, access_token: token }
+        : { message: record.content, published: true, access_token: token };
+      const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      publishResult = await response.json().catch(() => null);
+      if (!response.ok || publishResult?.error) throw new Error(publishResult?.error?.message || 'FACEBOOK_PUBLISH_FAILED');
+    } else {
+      const { getInstagramCredentials } = await import('./instagramService.ts');
+      const credentials = await getInstagramCredentials(workspaceId);
+      if (!credentials.businessAccountId || !credentials.accessToken) throw new Error('INSTAGRAM_CREDENTIALS_MISSING');
+      if (!record.imageUrl) throw new Error('INSTAGRAM_IMAGE_REQUIRED');
+
+      const mediaResponse = await fetch(`https://graph.facebook.com/v23.0/${encodeURIComponent(credentials.businessAccountId)}/media`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: record.imageUrl, caption: record.content, access_token: credentials.accessToken })
+      });
+      const media = await mediaResponse.json().catch(() => null);
+      if (!mediaResponse.ok || media?.error || !media?.id) throw new Error(media?.error?.message || 'INSTAGRAM_MEDIA_CREATE_FAILED');
+
+      const publishResponse = await fetch(`https://graph.facebook.com/v23.0/${encodeURIComponent(credentials.businessAccountId)}/media_publish`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creation_id: media.id, access_token: credentials.accessToken })
+      });
+      publishResult = await publishResponse.json().catch(() => null);
+      if (!publishResponse.ok || publishResult?.error || !publishResult?.id) throw new Error(publishResult?.error?.message || 'INSTAGRAM_PUBLISH_FAILED');
+    }
+
+    const externalId = String(publishResult?.post_id || publishResult?.id || '').trim();
+    if (!externalId) throw new Error('META_PUBLISH_ID_MISSING');
+
+    await transitionRecordState(workspaceId, recordId, 'published', {
+      externalPostId: externalId,
+      publishedAt: new Date().toISOString(),
+      attempts: nextAttempts,
+    });
+    return { success: true, recordId, externalPostId: externalId };
   } catch (e: any) {
-    await transitionRecordState(workspaceId, recordId, 'failed', { lastError: sanitizeError(e), attempts: (record.attempts || 0) + 1 });
-    return { success: false, error: sanitizeError(e) };
+    const attempts = nextAttempts;
+    await transitionRecordState(workspaceId, recordId, attempts >= 3 ? 'failed' : 'scheduled', {
+      lastError: sanitizeError(e),
+      attempts,
+    });
+    return { success: false, error: sanitizeError(e), recordId };
   }
-
-  await transitionRecordState(workspaceId, recordId, 'published', {
-    externalPostId,
-    publishedAt: new Date().toISOString(),
-    attempts: (record.attempts || 0) + 1,
-  });
-
-  return { success: true, recordId, externalPostId };
 }

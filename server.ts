@@ -8754,6 +8754,16 @@ app.post(
     };
 
     const selectedPrompt = agentPrompts[agent] || agentPrompts.support;
+    const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
+    const controlPlane = await import("./src/services/foxAgentControlPlane");
+    const registeredAgent = await controlPlane.getAgentByRole(roleMap[agent] || "custom");
+    if (registeredAgent) {
+      try {
+        await controlPlane.logActivity({ agentId: registeredAgent.id, type: "agent_execution_started", message: `Agent started work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, sessionId } });
+      } catch (activityError) {
+        console.warn("[FOX Agent Activity] start logging skipped", activityError);
+      }
+    }
 
     try {
       const result = await aiAgentService.generateChatResponse({
@@ -8769,12 +8779,11 @@ app.post(
 
       if (!result || result.source === "error_fallback") {
         try {
-          const { getAgentByRole, incrementAgentFailure, logActivity } = await import("./src/services/foxAgentControlPlane");
-          const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
-          const registered = await getAgentByRole(roleMap[agent] || "custom");
+          const { incrementAgentFailure, logActivity } = controlPlane;
+          const registered = registeredAgent;
           if (registered) {
             await incrementAgentFailure(registered.id);
-            await logActivity({ agentId: registered.id, type: "task_failed", message: `Agent failed for workspace ${trustedWorkspace.id}`, severity: "error", metadata: { workspaceId: trustedWorkspace.id, agent, channel } });
+            await logActivity({ agentId: registered.id, type: "agent_execution_failed", message: `Agent failed for workspace ${trustedWorkspace.id}`, severity: "error", metadata: { workspaceId: trustedWorkspace.id, agent, channel } });
           }
         } catch (activityError) { console.warn("[FOX Agent Activity] failure logging skipped", activityError); }
         return res.status(503).json({
@@ -8785,12 +8794,11 @@ app.post(
       }
 
       try {
-        const { getAgentByRole, incrementAgentSuccess, logActivity } = await import("./src/services/foxAgentControlPlane");
-        const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
-        const registered = await getAgentByRole(roleMap[agent] || "custom");
+        const { incrementAgentSuccess, logActivity } = controlPlane;
+        const registered = registeredAgent;
         if (registered) {
           await incrementAgentSuccess(registered.id);
-          await logActivity({ agentId: registered.id, type: "task_completed", message: `Agent completed work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, source: result.source } });
+          await logActivity({ agentId: registered.id, type: "agent_execution_completed", message: `Agent completed work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, source: result.source } });
         }
       } catch (activityError) { console.warn("[FOX Agent Activity] success logging skipped", activityError); }
 
@@ -9023,8 +9031,8 @@ app.get(
     );
     const configured = webhookUrlConfigured && webhookSecretConfigured;
 
-    let planAllows = false;
-    if (workspaceId) {
+    let planAllows = String((req as any).user?.role || "") === "super_admin";
+    if (workspaceId && !planAllows) {
       const trusted = resolveTrustedWorkspace(String(workspaceId));
       if (trusted) {
         const access = requireWorkspaceFeature(trusted, "n8n");

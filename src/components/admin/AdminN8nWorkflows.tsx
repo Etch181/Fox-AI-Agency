@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useApp } from "../../context/AppContext";
+import { authenticatedFetch } from "../../services/authenticatedFetch";
 import { Workflow, Play, CheckCircle2, Clock, Zap, ArrowRight, Globe } from "lucide-react";
 
 export const AdminN8nWorkflows: React.FC = () => {
@@ -7,6 +8,10 @@ export const AdminN8nWorkflows: React.FC = () => {
   const isAr = language === "ar";
   const [runningWfId, setRunningWfId] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("/api/n8n/webhook");
+  const [runtimeStatus, setRuntimeStatus] = useState<any>(null);
+  useEffect(() => {
+    authenticatedFetch("/api/n8n/status").then((r) => r.json()).then(setRuntimeStatus).catch(() => setRuntimeStatus(null));
+  }, []);
 
   const handleRunTest = async (wf: any) => {
     setRunningWfId(wf.id);
@@ -58,6 +63,17 @@ export const AdminN8nWorkflows: React.FC = () => {
               ? "أتمتة إشعارات واتساب وتليجرام وحجوزات العيادات وإشعار السداد ومزامنة Google Sheets CRM."
               : "Automate WhatsApp, Telegram, Appointments, Payment Notifications, and Google Sheets CRM Sync."}
           </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wider text-slate-400">FOX ↔ n8n Runtime</p>
+            <p className="mt-1 text-sm font-black text-slate-900 dark:text-white">{runtimeStatus?.status === "online" ? (isAr ? "متصل فعلياً" : "Connected") : runtimeStatus?.status === "disabled" ? (isAr ? "معطل" : "Disabled") : (isAr ? "غير مكتمل التهيئة" : "Not fully configured")}</p>
+            <p className="mt-1 text-[11px] text-slate-500">{runtimeStatus?.message || (isAr ? "جاري قراءة حالة الربط من الخادم" : "Reading live integration status from the server")}</p>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-[10px] font-black ${runtimeStatus?.status === "online" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600"}`}>{runtimeStatus?.status || "CHECKING"}</span>
         </div>
       </div>
 

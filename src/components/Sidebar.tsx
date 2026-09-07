@@ -585,18 +585,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
           </button>
 
           <button
-            onClick={() => setActiveTab("client_n8n")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-              activeTab === "client_n8n"
-                ? "bg-orange-600/10 text-orange-500"
-                : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-            }`}
-          >
-            <Zap className="h-4 w-4 text-amber-500" />
-            <span>{isAr ? "ربط أتمتة n8n" : "n8n Automation"}</span>
-          </button>
-
-          <button
             onClick={() => setActiveTab("client_staff")}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
               activeTab === "client_staff"

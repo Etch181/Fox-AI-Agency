@@ -49,15 +49,14 @@ test("duplicate publish prevention via state and bounded retries", async () => {
   // this id uses enterprise so entitlement + credentials checks pass.
   const id = await createSocialPublishRecord('ws-publish-dedup', { platform: 'instagram', content: 'dedup test', mode: 'MANUAL_APPROVAL', state: 'scheduled', scheduledAt: new Date().toISOString() });
 
-  // First process should succeed (simulated)
+  // Real publishing must fail closed in tests because no real Meta response exists.
+  // The important invariant is that a failed provider call never fabricates a published state.
   const r1 = await processScheduledPost('ws-publish-dedup', id);
-  assert.strictEqual(r1.success, true);
+  assert.strictEqual(r1.success, false);
 
-  // After published, processing again should not work (not scheduled)
-  // For bounded retries, test attempts tracking
   const record = await getSocialPublishRecord('ws-publish-dedup', id);
   assert.ok(record);
-  assert.strictEqual(record?.state, 'published');
+  assert.notStrictEqual(record?.state, 'published');
   assert.strictEqual(record?.attempts ?? 0, 1);
 });
 

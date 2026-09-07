@@ -59,7 +59,6 @@ import {
   INITIAL_N8N_WORKFLOWS,
   INITIAL_SUPPORT_TICKETS,
   INITIAL_AUDIT_LOGS,
-  INITIAL_GEMINI_METRICS,
 } from "../data/mockData";
 import { authenticatedFetch } from "../services/authenticatedFetch";
 import { createAuditLogId } from "../utils/auditLog";
@@ -145,19 +144,7 @@ interface AppContextType {
     metadata?: Record<string, any>;
   }) => Promise<AuditLog>;
   geminiMetrics: GeminiTenantMetrics[];
-  recordGeminiCall: (
-    workspaceId: string,
-    latencyMs: number,
-    success: boolean,
-    errorCode?: string,
-    errorMessage?: string,
-    promptSnippet?: string
-  ) => void;
-  simulateGeminiPing: (
-    workspaceId: string
-  ) => Promise<{ latencyMs: number; success: boolean; errorCode?: string }>;
   clearTenantErrorLogs: (workspaceId: string) => void;
-  resetGeminiMetrics: () => void;
   toasts: ToastMessage[];
   addToast: (message: string, type?: "success" | "error" | "info") => void;
   
@@ -948,10 +935,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : [];
   });
 
-  const [geminiMetrics, setGeminiMetrics] = useState<GeminiTenantMetrics[]>(() => {
-    const saved = localStorage.getItem("fox_gemini_metrics");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [geminiMetrics, setGeminiMetrics] = useState<GeminiTenantMetrics[]>([]);
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   useCollectionSync("menuItems", setMenuItems);
@@ -990,158 +974,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
 
-  // Firestore Gemini Metrics Sync
+  // Real AI telemetry sync: aiModelUsage is the server-side source of truth.
+  // No browser-generated counters, demo seeds, synthetic pings, or reset-to-demo behavior.
   useEffect(() => {
     if (!currentUser) return;
-    const isSuperAdmin = currentUser?.role === "super_admin";
-    const q = isSuperAdmin
-      ? collection(db, "gemini_metrics")
-      : query(collection(db, "gemini_metrics"), where("workspaceId", "==", currentUser.workspaceId));
+    const usageRef = collection(db, "aiModelUsage");
+    const usageQuery = currentUser.role === "super_admin"
+      ? usageRef
+      : query(usageRef, where("workspaceId", "==", currentUser.workspaceId));
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const fetched: GeminiTenantMetrics[] = snapshot.docs.map((d) => d.data() as GeminiTenantMetrics);
-          setGeminiMetrics(fetched);
-          localStorage.setItem("fox_gemini_metrics", JSON.stringify(fetched));
-        }
-      },
-      (err) => {
-        console.warn("Firestore gemini metrics sync notice:", err);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("fox_gemini_metrics", JSON.stringify(geminiMetrics));
-  }, [geminiMetrics]);
-
-  const recordGeminiCall = (
-    workspaceId: string,
-    latencyMs: number,
-    success: boolean,
-    errorCode?: string,
-    errorMessage?: string,
-    promptSnippet?: string
-  ) => {
-    const now = new Date();
-    const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-
-    setGeminiMetrics((prev) => {
-      return prev.map((m) => {
-        if (m.workspaceId !== workspaceId) return m;
-
-        const totalCalls = m.totalCalls + 1;
-        const successfulCalls = success ? m.successfulCalls + 1 : m.successfulCalls;
-        const errorCalls = success ? m.errorCalls : m.errorCalls + 1;
-        const errorRatePercent = Number(((errorCalls / totalCalls) * 100).toFixed(2));
-
-        const avgLatencyMs = Math.round((m.avgLatencyMs * m.totalCalls + latencyMs) / totalCalls);
-        const p95LatencyMs = Math.max(m.p95LatencyMs, Math.round(latencyMs * 1.15));
-
-        const latencyTrend = [...m.latencyTrend.slice(1), latencyMs];
-        const errorTrend = [...m.errorTrend.slice(1), success ? 0 : 1];
-
-        let status: "healthy" | "degraded" | "down" = "healthy";
-        if (errorRatePercent > 10 || avgLatencyMs > 1500) {
-          status = "down";
-        } else if (errorRatePercent > 3 || avgLatencyMs > 700) {
-          status = "degraded";
-        }
-
-        let recentErrorLogs = m.recentErrorLogs;
-        if (!success) {
-          const newErr: GeminiErrorLog = {
-            id: `ERR-${Date.now().toString().slice(-6)}`,
-            timestamp: formattedDate,
-            workspaceId: m.workspaceId,
-            workspaceName: m.workspaceName,
-            errorCode: errorCode || "500_UNKNOWN_ERROR",
-            errorMessage: errorMessage || "An unexpected error occurred during Gemini API generation.",
-            latencyMs,
-            promptSnippet: promptSnippet || "Live chat prompt execution...",
-            model: m.activeModel || "gemini-2.5-flash",
-          };
-          recentErrorLogs = [newErr, ...m.recentErrorLogs].slice(0, 15);
-        }
-
-        const newMetric: GeminiTenantMetrics = {
-          ...m,
-          totalCalls,
-          successfulCalls,
-          errorCalls,
-          errorRatePercent,
-          avgLatencyMs,
-          p95LatencyMs,
-          status,
-          lastCallTimestamp: formattedDate,
-          latencyTrend,
-          errorTrend,
-          recentErrorLogs,
+    const unsubscribe = onSnapshot(usageQuery, (snapshot) => {
+      const grouped = new Map<string, any>();
+      for (const docSnap of snapshot.docs) {
+        const event = docSnap.data() as any;
+        const workspaceId = String(event.workspaceId || "").trim();
+        if (!workspaceId) continue;
+        const workspace = workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) continue;
+        const current = grouped.get(workspaceId) || {
+          workspaceId, workspaceName: workspace.name, industry: workspace.industry, planId: workspace.planId,
+          totalCalls: 0, successfulCalls: 0, errorCalls: 0, latencyTotal: 0, latencyCount: 0,
+          latencies: [], errors: [], models: new Map<string, number>(),
         };
+        current.totalCalls += 1;
+        if (event.status === "success") current.successfulCalls += 1; else current.errorCalls += 1;
+        if (typeof event.latencyMs === "number") { current.latencyTotal += event.latencyMs; current.latencyCount += 1; current.latencies.push(Number(event.latencyMs)); }
+        const model = String(event.servedModel || event.requestedModel || event.model || "unknown");
+        current.models.set(model, (current.models.get(model) || 0) + 1);
+        if (event.status === "failure") current.errors.push({
+          id: docSnap.id, timestamp: String(event.createdAt || new Date().toISOString()), workspaceId,
+          workspaceName: workspace.name, errorCode: String(event.errorType || "AI_PROVIDER_ERROR"),
+          errorMessage: String(event.errorMessage || "AI provider request failed"), latencyMs: Number(event.latencyMs || 0),
+          promptSnippet: "Server-side AI telemetry event", model,
+        });
+        grouped.set(workspaceId, current);
+      }
 
-        setDoc(doc(db, "gemini_metrics", workspaceId), sanitizeForFirestore(newMetric)).catch((err) =>
-          console.warn("Firestore sync gemini metric error:", err)
-        );
-
-        return newMetric;
+      const nextMetrics: GeminiTenantMetrics[] = Array.from(grouped.values()).map((g) => {
+        const activeModel = Array.from(g.models.entries()).sort((a:any,b:any)=>b[1]-a[1])[0]?.[0] || "unknown";
+        const avgLatencyMs = g.latencyCount ? Math.round(g.latencyTotal / g.latencyCount) : 0;
+        const errorRatePercent = g.totalCalls ? Number(((g.errorCalls / g.totalCalls) * 100).toFixed(2)) : 0;
+        const status: "healthy" | "degraded" | "down" = errorRatePercent > 10 || avgLatencyMs > 1500 ? "down" : errorRatePercent > 3 || avgLatencyMs > 700 ? "degraded" : "healthy";
+        const trend = g.latencies.slice(-10);
+        return {
+          workspaceId: g.workspaceId, workspaceName: g.workspaceName, industry: g.industry, planId: g.planId, activeModel,
+          totalCalls: g.totalCalls, successfulCalls: g.successfulCalls, errorCalls: g.errorCalls, errorRatePercent,
+          avgLatencyMs, p95LatencyMs: trend.length ? Math.max(...trend) : 0, status,
+          lastCallTimestamp: snapshot.docs.length ? String(snapshot.docs[snapshot.docs.length-1].data().createdAt || "") : "",
+          rpm: 0, tpm: 0, latencyTrend: trend, errorTrend: g.errors.slice(-10).map(()=>1), recentErrorLogs: g.errors.slice(-15),
+        };
       });
-    });
-  };
-
-  const simulateGeminiPing = async (
-    workspaceId: string
-  ): Promise<{ latencyMs: number; success: boolean; errorCode?: string }> => {
-    const baseLatency = Math.floor(Math.random() * 250) + 180;
-    const isErrorOccurred = Math.random() < 0.12;
-
-    let latencyMs = baseLatency;
-    let success = true;
-    let errorCode = undefined;
-    let errorMessage = undefined;
-
-    if (isErrorOccurred) {
-      success = false;
-      const errorTypes = [
-        { code: "429_RATE_LIMIT", msg: "Quota exceeded for quota metric 'GenerateContent requests per minute'", extraLatency: 50 },
-        { code: "500_TIMEOUT", msg: "Upstream Google Gemini API Gateway socket connection timed out after 10000ms", extraLatency: 3500 },
-        { code: "400_SAFETY_FILTER", msg: "Candidate was blocked due to SAFETY threshold check", extraLatency: 120 },
-      ];
-      const err = errorTypes[Math.floor(Math.random() * errorTypes.length)];
-      errorCode = err.code;
-      errorMessage = err.msg;
-      latencyMs += err.extraLatency;
-    }
-
-    await new Promise((r) => setTimeout(r, Math.min(latencyMs / 2, 400)));
-
-    recordGeminiCall(
-      workspaceId,
-      latencyMs,
-      success,
-      errorCode,
-      errorMessage,
-      "Simulated real-time diagnostic ping..."
-    );
-
-    return { latencyMs, success, errorCode };
-  };
+      nextMetrics.sort((a,b)=>a.workspaceName.localeCompare(b.workspaceName));
+      setGeminiMetrics(nextMetrics);
+    }, (err) => console.warn("Firestore aiModelUsage telemetry sync notice:", err));
+    return () => unsubscribe();
+  }, [currentUser, workspaces]);
 
   const clearTenantErrorLogs = (workspaceId: string) => {
-    setGeminiMetrics((prev) =>
-      prev.map((m) =>
-        m.workspaceId === workspaceId
-          ? { ...m, recentErrorLogs: [], errorCalls: 0, errorRatePercent: 0, status: "healthy" }
-          : m
-      )
-    );
-  };
-
-  const resetGeminiMetrics = () => {
-    setGeminiMetrics(INITIAL_GEMINI_METRICS);
-    localStorage.setItem("fox_gemini_metrics", JSON.stringify(INITIAL_GEMINI_METRICS));
+    setGeminiMetrics((prev) => prev.map((m) =>
+      m.workspaceId === workspaceId
+        ? { ...m, recentErrorLogs: [], errorCalls: 0, errorRatePercent: 0, status: "healthy" }
+        : m
+    ));
   };
 
   // Firestore Audit Logs Sync
@@ -3830,10 +3724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         auditLogs,
         addAuditLog,
         geminiMetrics,
-        recordGeminiCall,
-        simulateGeminiPing,
         clearTenantErrorLogs,
-        resetGeminiMetrics,
         toasts,
         addToast,
         latestRegistration,

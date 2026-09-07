@@ -79,7 +79,7 @@ test("every staged n8n webhook rejects missing or empty shared-secret headers", 
   );
   const workflows = readdirSync(workflowsDirectory)
     .filter((name) => name.endsWith(".json"));
-  assert.equal(workflows.length, 10);
+  assert.equal(workflows.length, 11);
 
   for (const workflow of workflows) {
     const source = readFileSync(new URL(workflow, workflowsDirectory), "utf8");

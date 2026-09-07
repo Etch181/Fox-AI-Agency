@@ -28,7 +28,6 @@ export const ALL_VIEWS = [
   "client_whatsapp",
   "client_live_simulator",
   "client_subscription",
-  "client_n8n",
   "client_staff",
   "client_tickets",
   "client_promotions",

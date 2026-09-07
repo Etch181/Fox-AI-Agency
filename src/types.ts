@@ -677,7 +677,7 @@ export interface FoxActivity {
   agentId?: string;
   taskId?: string;
   executionId?: string;
-  type: 'agent_created' | 'agent_updated' | 'task_created' | 'task_assigned' | 'task_started' | 'task_completed' | 'task_failed' | 'task_retry' | 'approval_requested' | 'approval_decided' | 'review_started' | 'review_completed' | 'health_check' | 'self_healing' | 'staging_deploy' | 'custom';
+  type: 'agent_created' | 'agent_updated' | 'task_created' | 'task_assigned' | 'task_started' | 'task_completed' | 'task_failed' | 'agent_execution_started' | 'agent_execution_completed' | 'agent_execution_failed' | 'task_retry' | 'approval_requested' | 'approval_decided' | 'review_started' | 'review_completed' | 'health_check' | 'self_healing' | 'staging_deploy' | 'custom';
   message: string;
   severity: 'info' | 'warn' | 'error' | 'critical';
   metadata: Record<string, any>;

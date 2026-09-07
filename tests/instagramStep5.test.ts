@@ -103,8 +103,8 @@ test("offer/coupon linkage stays workspace scoped", async () => {
 
 test("UI integration: generateMarketingContent connects to ClientMarketingAgent flow", async () => {
   const s = await getOrCreateStrategy('ws-ui', { businessGoal: 'engagement', targetAudience: 'clinics', toneBrandVoice: 'professional' });
-  const result = await generateMarketingContent('ws-ui', s, 'instagram');
-  assert.strictEqual(result.topic, 'engagement');
-  assert.strictEqual(result.recommendedTime.platform, 'instagram');
-  assert.ok(result.content);
+  await assert.rejects(
+    () => generateMarketingContent('ws-ui', s, 'instagram'),
+    /MARKETING_AI_PROVIDER_UNAVAILABLE/,
+  );
 });

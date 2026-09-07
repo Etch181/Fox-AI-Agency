@@ -21,7 +21,7 @@ n8n sends `workspaceId`, `agent`, `message`, `channel`, `sessionId`, and optiona
 
 ## Activation policy
 
-These workflows are **import-ready but inactive**. They must not be activated until the n8n server has its shared secret, FOX internal URL, AI provider credentials, tenant event routing, and required external integration credentials. Marketing/social publishing also requires real Meta/Instagram credentials and consent/policy gates.
+The **FOX Unified Agent Router v3** is the live staging ingress at `POST /webhook/fox-unified-events`; it is signed, tenant-scoped, and calls FOX `/api/automation/agent`. The eight industry workflows in `agents/` remain **import-ready but inactive** until their individual external credentials, tenant routing, and policy gates are reviewed. Marketing/social publishing additionally requires real Meta/Instagram credentials and consent/policy gates.
 
 ## Next layer
 

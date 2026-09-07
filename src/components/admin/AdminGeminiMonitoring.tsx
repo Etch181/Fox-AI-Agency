@@ -18,7 +18,6 @@ import {
   Bot,
   TrendingUp,
   BarChart2,
-  Trash2,
   ExternalLink,
   ShieldAlert,
   Cpu,
@@ -35,7 +34,6 @@ export const AdminGeminiMonitoring: React.FC = () => {
   const {
     geminiMetrics,
     clearTenantErrorLogs,
-    resetGeminiMetrics,
     addToast,
     addAuditLog,
     currentUser,
@@ -154,28 +152,6 @@ export const AdminGeminiMonitoring: React.FC = () => {
     );
   };
 
-  // Clear tenant error logs
-  const handleClearErrors = (workspaceId: string, workspaceName: string) => {
-    clearTenantErrorLogs(workspaceId);
-    if (selectedTenantModal?.workspaceId === workspaceId) {
-      setSelectedTenantModal((prev) =>
-        prev
-          ? {
-              ...prev,
-              recentErrorLogs: [],
-              errorCalls: 0,
-              errorRatePercent: 0,
-              status: "healthy",
-            }
-          : null
-      );
-    }
-    addToast(
-      isAr ? `تم تنظيف سجلات الأخطاء لـ ${workspaceName}` : `Error logs cleared for ${workspaceName}`,
-      "success"
-    );
-  };
-
   return (
     <div className="space-y-6 pb-12 animate-fade-in">
       {/* HEADER BANNER */}
@@ -194,8 +170,8 @@ export const AdminGeminiMonitoring: React.FC = () => {
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl font-medium leading-relaxed">
               {isAr
-                ? "تتبع مباشر ولحظي لزمن الاستجابة (Latency)، معُدّل الأخطاء (Error Rates)، وتوزيع الطلبات لكل مؤسسة (Tenant) عبر نماذج Google Gemini 2.5."
-                : "Real-time monitoring of response latency, HTTP/Quota error rates, throughput (RPM/TPM), and safety blocks per workspace tenant."}
+                ? "تتبع مباشر لزمن الاستجابة، الأخطاء، وحجم الاستدعاءات حسب مساحة العمل والنموذج الفعلي المسجل في aiModelUsage."
+                : "Live monitoring of latency, provider errors, call volume, and the actual models recorded by aiModelUsage per workspace."}
             </p>
           </div>
 
@@ -334,17 +310,10 @@ export const AdminGeminiMonitoring: React.FC = () => {
               }`}
             >
               <Cpu className="h-4 w-4" />
-              <span>{isAr ? "حالة نماذج Gemini 2.5" : "Gemini Models Status"}</span>
+              <span>{isAr ? "حالة النماذج المرصودة فعلياً" : "Observed AI Models"}</span>
             </button>
           </div>
 
-          <button
-            onClick={resetGeminiMetrics}
-            className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 font-semibold underline flex items-center gap-1"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>{isAr ? "إعادة ضبط التقييمات" : "Reset Metrics"}</span>
-          </button>
         </div>
 
         {/* Filter Controls (When in Tenants tab) */}
@@ -660,104 +629,39 @@ export const AdminGeminiMonitoring: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: GEMINI MODELS HEALTH MATRIX */}
+      {/* TAB 3: REAL MODEL HEALTH MATRIX */}
       {activeTab === "health_matrix" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Gemini 2.5 Flash */}
-          <div className="p-6 rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-amber-500" />
-                <h3 className="font-black text-slate-900 dark:text-white">Gemini 2.5 Flash</h3>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 text-[10px] font-black uppercase">
-                Active Tier
-              </span>
+        <div className="space-y-4">
+          {Array.from(new Set(geminiMetrics.map((m) => m.activeModel).filter((m) => m && m !== "unknown"))).length === 0 ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-xs font-bold text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+              {isAr ? "لا توجد استدعاءات AI حقيقية مسجلة حتى الآن؛ لن يتم عرض نماذج أو أرقام افتراضية." : "No real AI calls have been recorded yet; no synthetic models or metrics are shown."}
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {isAr
-                ? "النموذج القياسي عالي السرعة المحسن للمحادثات التفاعلية وتأكيد المواعيد والرد الآلي."
-                : "Primary high-speed model optimized for real-time customer dialogues, appointment booking, and instant replies."}
-            </p>
-            <div className="pt-2 space-y-2 text-xs border-t border-slate-100 dark:border-slate-800">
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "متوسط زمن الاستجابة" : "Avg Latency"}</span>
-                <span className="font-bold text-slate-900 dark:text-white">~380ms</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحد الأقصى للتزامن" : "Concurrency Limit"}</span>
-                <span className="font-bold text-emerald-500">1,000 RPM</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحالة الحالية" : "Current Status"}</span>
-                <span className="font-black text-emerald-500">100% Operational</span>
-              </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from(new Set(geminiMetrics.map((m) => m.activeModel).filter((m) => m && m !== "unknown"))).map((model) => {
+                const rows = geminiMetrics.filter((m) => m.activeModel === model);
+                const calls = rows.reduce((n, m) => n + m.totalCalls, 0);
+                const errors = rows.reduce((n, m) => n + m.errorCalls, 0);
+                const latency = calls ? Math.round(rows.reduce((n, m) => n + m.avgLatencyMs * m.totalCalls, 0) / calls) : 0;
+                const errorRate = calls ? Number(((errors / calls) * 100).toFixed(2)) : 0;
+                const status = errorRate > 10 || latency > 1500 ? "down" : errorRate > 3 || latency > 700 ? "degraded" : "healthy";
+                return (
+                  <div key={model} className="rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-amber-500" /><h3 className="font-black text-slate-900 dark:text-white break-all">{model}</h3></div>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${status === "healthy" ? "bg-emerald-500/10 text-emerald-600" : status === "degraded" ? "bg-amber-500/10 text-amber-600" : "bg-rose-500/10 text-rose-600"}`}>{status}</span>
+                    </div>
+                    <div className="mt-5 grid grid-cols-3 gap-2 text-xs">
+                      <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800"><span className="text-slate-400">Calls</span><p className="font-black text-slate-900 dark:text-white">{calls}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800"><span className="text-slate-400">Errors</span><p className="font-black text-slate-900 dark:text-white">{errors}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800"><span className="text-slate-400">Latency</span><p className="font-black text-slate-900 dark:text-white">{latency}ms</p></div>
+                    </div>
+                    <p className="mt-4 text-[11px] text-slate-500">{isAr ? "المصدر: aiModelUsage — هذه الأرقام مشتقة من الاستدعاءات الفعلية فقط." : "Source: aiModelUsage — metrics are derived from real provider calls only."}</p>
+                  </div>
+                );
+              })}
             </div>
-          </div>
-
-          {/* Gemini 2.5 Pro */}
-          <div className="p-6 rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Bot className="h-5 w-5 text-indigo-500" />
-                <h3 className="font-black text-slate-900 dark:text-white">Gemini 2.5 Pro</h3>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-500 text-[10px] font-black uppercase">
-                Reasoning Tier
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {isAr
-                ? "نموذج الاستدلال المعقد المخصص لمعالجة الشكاوى الطبية وتصنيف الطلبات المتقدمة."
-                : "Advanced reasoning model designed for complex complaint resolution and multi-step logic."}
-            </p>
-            <div className="pt-2 space-y-2 text-xs border-t border-slate-100 dark:border-slate-800">
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "متوسط زمن الاستجابة" : "Avg Latency"}</span>
-                <span className="font-bold text-slate-900 dark:text-white">~650ms</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحد الأقصى للتزامن" : "Concurrency Limit"}</span>
-                <span className="font-bold text-indigo-500">360 RPM</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحالة الحالية" : "Current Status"}</span>
-                <span className="font-black text-emerald-500">100% Operational</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Gemini Flash Lite */}
-          <div className="p-6 rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Zap className="h-5 w-5 text-sky-500" />
-                <h3 className="font-black text-slate-900 dark:text-white">Gemini Flash Lite</h3>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-500 text-[10px] font-black uppercase">
-                Ultra Light
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {isAr
-                ? "نموذج فائق السرعة والتوفير المخصص للتصنيف اللحظي والتوجيه السريع."
-                : "Ultra-fast lightweight model for classification, fallback intent routing, and triage."}
-            </p>
-            <div className="pt-2 space-y-2 text-xs border-t border-slate-100 dark:border-slate-800">
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "متوسط زمن الاستجابة" : "Avg Latency"}</span>
-                <span className="font-bold text-slate-900 dark:text-white">~190ms</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحد الأقصى للتزامن" : "Concurrency Limit"}</span>
-                <span className="font-bold text-sky-500">2,000 RPM</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">{isAr ? "الحالة الحالية" : "Current Status"}</span>
-                <span className="font-black text-emerald-500">100% Operational</span>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -830,17 +734,7 @@ export const AdminGeminiMonitoring: React.FC = () => {
                   {isAr ? "سجل الأخطاء الفردية للمؤسسة" : "Tenant Specific Error Logs"}
                 </h4>
 
-                {selectedTenantModal.recentErrorLogs.length > 0 && (
-                  <button
-                    onClick={() =>
-                      handleClearErrors(selectedTenantModal.workspaceId, selectedTenantModal.workspaceName)
-                    }
-                    className="text-xs text-rose-500 hover:underline font-bold flex items-center gap-1"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span>{isAr ? "مسح أخطاء هذه المؤسسة" : "Clear Error History"}</span>
-                  </button>
-                )}
+
               </div>
 
               <div className="max-h-60 overflow-y-auto space-y-2 pr-1">

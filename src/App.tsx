@@ -459,15 +459,6 @@ const AppContent: React.FC = () => {
             <ClientSubscription />
           </WorkspaceGuard>
         );
-      case "client_n8n":
-        if (currentUser.role !== "super_admin") {
-          return (
-            <WorkspaceGuard>
-              <ClientDashboard onNavigate={navigateTo} />
-            </WorkspaceGuard>
-          );
-        }
-        return <AdminN8nWorkflows />;
       case "client_staff":
         return (
           <WorkspaceGuard>

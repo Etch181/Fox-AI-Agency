@@ -181,12 +181,6 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
           label: isAr ? "الاشتراك والفواتير" : "Subscription & Billing",
           icon: CreditCard,
         };
-      case "client_n8n":
-        return {
-          parentCategory: isAr ? "التكاملات" : "Integrations",
-          label: isAr ? "ربط الويب هوك n8n" : "n8n Webhook Settings",
-          icon: Workflow,
-        };
       case "client_staff":
         return {
           parentCategory: isAr ? "إدارة الفريق" : "Team & Security",

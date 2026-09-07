@@ -70,7 +70,6 @@ test("staff allowlist contains operational views and excludes owner and agency c
     "client_ai_settings",
     "client_telegram",
     "client_whatsapp",
-    "client_n8n",
     "client_staff",
     "client_promotions",
     "client_knowledge_builder",
@@ -102,8 +101,8 @@ test("restored navigation is re-authorized rather than trusted", () => {
 
 test("known allowed views remain available to their intended roles", () => {
   assert.equal(resolveAuthorizedView("staff", "client_crm"), "client_crm");
-  assert.equal(resolveAuthorizedView("staff", "client_n8n"), "client_dashboard");
-  assert.equal(resolveAuthorizedView("client_owner", "client_n8n"), "client_n8n");
+  assert.equal(resolveAuthorizedView("client_owner", "client_crm"), "client_crm");
+  assert.equal(resolveAuthorizedView("super_admin", "admin_n8n"), "admin_n8n");
   assert.equal(resolveAuthorizedView("client_owner", "client_subscription"), "client_subscription");
   assert.equal(resolveAuthorizedView("super_admin", "admin_clients"), "admin_clients");
 });
