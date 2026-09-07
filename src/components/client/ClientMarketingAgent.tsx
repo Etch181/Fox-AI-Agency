@@ -424,8 +424,9 @@ export const ClientMarketingAgent: React.FC = () => {
                       `🎯 Free Trial: Smart AI Agent customized for booking & automated order management`
                     ];
                     const list = isAr ? sampleTopicsAr : sampleTopicsEn;
-                    const randomChoice = list[Math.floor(Math.random() * list.length)];
-                    setTopic(randomChoice);
+                    const deterministicIndex = currentWorkspace?.id ? (currentWorkspace.id.length % list.length) : 0;
+                    const selectedChoice = list[deterministicIndex];
+                    setTopic(selectedChoice);
                   }}
                   className="text-[11px] font-bold text-orange-600 dark:text-orange-400 hover:text-orange-700 flex items-center gap-1 bg-orange-50 dark:bg-orange-950/50 px-2.5 py-1 rounded-xl border border-orange-200 dark:border-orange-800 transition-all cursor-pointer"
                 >

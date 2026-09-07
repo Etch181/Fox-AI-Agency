@@ -238,3 +238,16 @@ export async function processScheduledPost(
     return { success: false, error: sanitizeError(e), recordId };
   }
 }
+
+export async function listSocialPublishRecords(
+  workspaceId: string,
+  limit: number = 20
+): Promise<SocialPublishRecord[]> {
+  const snapshot = await adminDb
+    .collection(COLLECTION)
+    .where('workspaceId', '==', workspaceId)
+    .orderBy('updatedAt', 'desc')
+    .limit(limit)
+    .get();
+  return snapshot.docs.map((d) => ({ ...d.data() as SocialPublishRecord, id: d.id }));
+}
