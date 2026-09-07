@@ -525,6 +525,12 @@ export type AgentRole =
   | 'marketing'
   | 'monitoring'
   | 'executive-reporting'
+  | 'clinic-appointments'
+  | 'complaints-suggestions'
+  | 'pharmacy-sales'
+  | 'retail-sales'
+  | 'restaurant-operations'
+  | 'course-center'
   | 'custom';
 
 export type TaskStatus = 

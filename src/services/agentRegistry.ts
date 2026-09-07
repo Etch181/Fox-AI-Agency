@@ -358,13 +358,31 @@ const INITIAL_AGENTS: Omit<FoxAgent, "id" | "createdAt" | "updatedAt">[] = [
   },
 ];
 
+const SPECIALIZED_SAAS_AGENTS: Omit<FoxAgent, "id" | "createdAt" | "updatedAt">[] = [
+  ["FOX-CLINIC-APPOINTMENTS", "clinic-appointments", "Clinic appointment booking, availability, rescheduling, cancellation and reminders."],
+  ["FOX-COMPLAINTS-SUGGESTIONS", "complaints-suggestions", "Complaint intake, classification, priority, escalation and customer follow-up."],
+  ["FOX-PHARMACY-SALES", "pharmacy-sales", "Pharmacy catalog sales, availability, alternatives, prescription gating and follow-up."],
+  ["FOX-RETAIL-SALES", "retail-sales", "Retail product qualification, recommendations, stock/order intent and follow-up."],
+  ["FOX-RESTAURANT-OPERATIONS", "restaurant-operations", "Restaurant menu, reservations, order intent, customer handoff and follow-up."],
+  ["FOX-COURSE-CENTER", "course-center", "Course discovery, enrollment, schedules, fees, lead capture and follow-up."],
+].map(([name, role, description]) => ({
+  name, role: role as AgentRole, description, status: "active",
+  capabilities: {
+    allowedActions: ["receive_customer_event", "execute_domain_workflow", "read_tenant_data", "write_tenant_activity", "escalate_to_human", "schedule_followup"],
+    restrictedActions: ["write_code", "production_deploy", "delete_production_data", "modify_secrets", "approve_payments"],
+    triggerTypes: ["workflow_event", "system_event", "scheduled"], workflowIds: [], requiresApprovalFor: [],
+  },
+  modelConfig: { primaryProvider: "openrouter", primaryModel: "openrouter/free", fallbackProviders: ["openrouter"], fallbackModels: ["openrouter/free"] },
+  lastExecutionAt: undefined, lastExecutionStatus: undefined, successCount: 0, failureCount: 0, health: "healthy",
+}));
+
 export async function initializeAgentRegistry(): Promise<FoxAgent[]> {
   const existingAgents = await listAgents();
   const existingNames = new Set(existingAgents.map((a) => a.name));
   
   const created: FoxAgent[] = [];
   
-  for (const agentDef of INITIAL_AGENTS) {
+  for (const agentDef of [...INITIAL_AGENTS, ...SPECIALIZED_SAAS_AGENTS]) {
     if (!existingNames.has(agentDef.name)) {
       const createdAgent = await createAgent(agentDef);
       created.push(createdAgent);
@@ -383,4 +401,4 @@ export async function ensureAgentRegistry(): Promise<FoxAgent[]> {
   return initializeAgentRegistry();
 }
 
-export { INITIAL_AGENTS };
+export { INITIAL_AGENTS, SPECIALIZED_SAAS_AGENTS };

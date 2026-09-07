@@ -73,7 +73,7 @@
             },
             {
               "name": "channel",
-              "value": "={ $json.body?.channel || 'marketing' }",
+              "value": "= $json.body?.channel || 'marketing' }",
               "type": "string"
             },
             {

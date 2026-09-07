@@ -8768,12 +8768,31 @@ app.post(
       });
 
       if (!result || result.source === "error_fallback") {
+        try {
+          const { getAgentByRole, incrementAgentFailure, logActivity } = await import("./src/services/foxAgentControlPlane");
+          const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
+          const registered = await getAgentByRole(roleMap[agent] || "custom");
+          if (registered) {
+            await incrementAgentFailure(registered.id);
+            await logActivity({ agentId: registered.id, type: "agent_execution_failed", message: `Agent failed for workspace ${trustedWorkspace.id}`, severity: "error", metadata: { workspaceId: trustedWorkspace.id, agent, channel } });
+          }
+        } catch (activityError) { console.warn("[FOX Agent Activity] failure logging skipped", activityError); }
         return res.status(503).json({
           success: false,
           code: "AI_PROVIDER_UNAVAILABLE",
           error: "No real AI provider response was available",
         });
       }
+
+      try {
+        const { getAgentByRole, incrementAgentSuccess, logActivity } = await import("./src/services/foxAgentControlPlane");
+        const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
+        const registered = await getAgentByRole(roleMap[agent] || "custom");
+        if (registered) {
+          await incrementAgentSuccess(registered.id);
+          await logActivity({ agentId: registered.id, type: "agent_execution_completed", message: `Agent completed work for workspace ${trustedWorkspace.id}`, severity: "info", metadata: { workspaceId: trustedWorkspace.id, agent, channel, source: result.source } });
+        }
+      } catch (activityError) { console.warn("[FOX Agent Activity] success logging skipped", activityError); }
 
       return res.json({
         success: true,
