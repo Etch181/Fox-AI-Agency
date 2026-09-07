@@ -7396,13 +7396,16 @@ const INTEGRATION_FLAGS = {
 };
 
 // Telegram Polling Engine for Real-Time Telegram Response
+const agencyPollingEnabled =
+  INTEGRATION_FLAGS.telegram && INTEGRATION_FLAGS.agencyTelegramPolling;
+// AGENCY_TELEGRAM_POLLING_DISABLED: legacy polling requires ENABLE_AGENCY_TELEGRAM_POLLING.
 let isBotEnabled = INTEGRATION_FLAGS.telegram;
 let isAgencyWebhookActive = false;
 let isPollingActive = false;
 let lastUpdateOffset = 0;
 
 async function startTelegramPolling() {
-  if (isPollingActive || !isBotEnabled) return;
+  if (!agencyPollingEnabled || isPollingActive || !isBotEnabled) return;
   isPollingActive = true;
 
   // Clear any existing failing webhooks so Telegram routes messages to getUpdates
