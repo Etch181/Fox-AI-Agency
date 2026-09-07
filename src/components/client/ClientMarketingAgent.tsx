@@ -148,25 +148,21 @@ export const ClientMarketingAgent: React.FC = () => {
       const data = await response.json();
 
       if (data.success) {
-        const sampleVisuals = [
-          "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&auto=format&fit=crop&q=80"
-        ];
-        const randomImg = sampleVisuals[Math.floor(Math.random() * sampleVisuals.length)];
-
+        // NOTE: image generation is NOT a connected provider. We do NOT fabricate
+        // or persist a fake imageUrl. The marketing_generated_posts record only
+        // contains the AI-authored copy + scheduling advice returned by the server.
+        // If image generation is added later (e.g. via n8n + DALL-E/Stability),
+        // populate imageUrl from the real provider response only.
         const newResult: GeneratedSocialPost = {
           workspaceId: currentWorkspace?.id || "",
           platform: selectedPlatform,
           topic: topic || (isAr ? "منشور تسويقي مميز" : "Social Marketing Post"),
           content: data.postContent,
-          recommendedTime: data.recommendedTime || (isAr ? "اليوم الساعة 7:30 مساءً" : "Today at 7:30 PM"),
-          bestDays: data.bestDays || (isAr ? "الأحد، الثلاثاء، الخميس" : "Sun, Tue, Thu"),
-          reason: data.reason || (isAr ? "فترة الذروة المسائية لجمهورك المستهدف." : "Peak evening time for target audience."),
-          engagementBoost: data.engagementBoost || "+65% تفاعل",
+          recommendedTime: data.recommendedTime || "",
+          bestDays: data.bestDays || "",
+          reason: data.reason || "",
+          engagementBoost: data.engagementBoost || "",
           suggestedVisualPrompt: data.suggestedVisualPrompt,
-          imageUrl: randomImg,
           targetAudience
         };
 
