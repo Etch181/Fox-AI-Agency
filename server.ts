@@ -9083,6 +9083,45 @@ app.get(
 
 
 // ============================================================
+// Super Admin Infrastructure — service links/health only.
+// Never expose credentials or tenant controls.
+// ============================================================
+app.get(
+  "/api/admin/infrastructure",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("admin infrastructure", async (req: any, res) => {
+    if (String(req.user?.role || "") !== "super_admin") {
+      return res.status(403).json({ success: false, error: "Super Admin access required" });
+    }
+
+    const definitions = [
+      { id: "openlit", name: "OpenLIT", ar: "OpenLIT — مراقبة Gemini وLLM", purpose: "AI observability, traces, latency, tokens, cost and model behavior.", env: "FOX_OPENLIT_URL" },
+      { id: "phoenix", name: "Arize Phoenix", ar: "Phoenix — تتبع الـ Agents", purpose: "Agent/LLM traces, evaluation and execution-path debugging.", env: "FOX_PHOENIX_URL" },
+      { id: "qdrant", name: "Qdrant", ar: "Qdrant — قاعدة معرفة FOX", purpose: "Vector search layer for future tenant-isolated RAG and Knowledge Base retrieval.", env: "FOX_QDRANT_URL" },
+      { id: "uptime", name: "Uptime Kuma", ar: "Uptime Kuma — مراقبة الخدمات", purpose: "Availability monitoring for FOX, n8n, AI and infrastructure endpoints.", env: "FOX_UPTIME_KUMA_URL" },
+      { id: "metabase", name: "Metabase", ar: "Metabase — تحليلات الوكالة", purpose: "Business and operational analytics over approved FOX datasets.", env: "FOX_METABASE_URL" },
+      { id: "n8n", name: "n8n", ar: "n8n — محرك الأتمتة", purpose: "Live FOX automation engine and workflow console for Super Admin only.", env: "FOX_N8N_URL" },
+    ];
+
+    const services = await Promise.all(definitions.map(async (item) => {
+      const url = String(process.env[item.env] || "").trim();
+      let status = "not_configured";
+      if (url) {
+        try {
+          const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3500) });
+          status = response.ok ? "online" : "degraded";
+        } catch {
+          status = "offline";
+        }
+      }
+      return { id: item.id, name: item.name, ar: item.ar, purpose: item.purpose, url, status };
+    }));
+
+    return res.json({ success: true, services });
+  })
+);
+
+// ============================================================
 // Workspace Agent Activity — read-only tenant view.
 // No workflow definitions, URLs, credentials, or execution controls.
 // ============================================================

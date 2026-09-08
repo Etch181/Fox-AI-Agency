@@ -14,6 +14,8 @@ export const ALL_VIEWS = [
   "admin_codes",
   "admin_telegram",
   "admin_n8n",
+  "admin_agents",
+  "admin_infrastructure",
   "admin_tickets",
   "admin_audit_logs",
   "admin_gemini_status",

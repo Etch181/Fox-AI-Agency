@@ -36,6 +36,7 @@ import {
   BarChart2,
   Megaphone,
   MessageCircle,
+  ServerCog,
 } from "lucide-react";
 
 export type { ViewTab } from "../security/appAuthorization";
@@ -240,6 +241,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
             >
               <Workflow className="h-4 w-4" />
               <span>{isAr ? "سير عمليات n8n" : "n8n Workflows Engine"}</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("admin_agents")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
+                activeTab === "admin_agents"
+                  ? "bg-orange-600/10 text-orange-500"
+                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <Bot className="h-4 w-4 text-violet-500" />
+              <span>{isAr ? "مركز الوكلاء الحي" : "Live Agent Center"}</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("admin_infrastructure")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
+                activeTab === "admin_infrastructure"
+                  ? "bg-orange-600/10 text-orange-500"
+                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <ServerCog className="h-4 w-4 text-indigo-500" />
+              <span>{isAr ? "بنية FOX الذكية" : "FOX AI Infrastructure"}</span>
             </button>
 
             <button

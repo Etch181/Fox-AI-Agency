@@ -91,6 +91,18 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
           label: isAr ? "محركات الأتمتة n8n" : "n8n Webhook Engine",
           icon: Workflow,
         };
+      case "admin_agents":
+        return {
+          parentCategory: isAr ? "إدارة النظام" : "System Control",
+          label: isAr ? "مركز الوكلاء الحي" : "Live Agent Center",
+          icon: Activity,
+        };
+      case "admin_infrastructure":
+        return {
+          parentCategory: isAr ? "إدارة النظام" : "System Control",
+          label: isAr ? "بنية FOX الذكية" : "FOX AI Infrastructure",
+          icon: ShieldCheck,
+        };
       case "admin_tickets":
         return {
           parentCategory: isAr ? "إدارة النظام" : "System Control",

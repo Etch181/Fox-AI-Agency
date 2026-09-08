@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { authenticatedFetch } from "../../services/authenticatedFetch";
-import { Workflow, Play, CheckCircle2, Clock, Zap, ArrowRight, Globe } from "lucide-react";
+import { Workflow, Play, CheckCircle2, Clock, Zap, ArrowRight, Globe, ExternalLink, Bot } from "lucide-react";
 
 export const AdminN8nWorkflows: React.FC = () => {
   const { n8nWorkflows, addToast, language } = useApp();
@@ -9,8 +9,14 @@ export const AdminN8nWorkflows: React.FC = () => {
   const [runningWfId, setRunningWfId] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("/api/n8n/webhook");
   const [runtimeStatus, setRuntimeStatus] = useState<any>(null);
+  const [n8nUrl, setN8nUrl] = useState("");
+  const [showConsole, setShowConsole] = useState(false);
   useEffect(() => {
     authenticatedFetch("/api/n8n/status").then((r) => r.json()).then(setRuntimeStatus).catch(() => setRuntimeStatus(null));
+    authenticatedFetch("/api/admin/infrastructure").then((r) => r.json()).then((d) => {
+      const service = Array.isArray(d.services) ? d.services.find((x: any) => x.id === "n8n") : null;
+      if (service?.url) setN8nUrl(service.url);
+    }).catch(() => setN8nUrl(""));
   }, []);
 
   const handleRunTest = async (wf: any) => {
@@ -65,6 +71,26 @@ export const AdminN8nWorkflows: React.FC = () => {
           </p>
         </div>
       </div>
+
+      <div className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-700 to-indigo-700 p-5 text-white shadow-lg">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="flex items-center gap-2"><Bot className="h-5 w-5" /><p className="text-xs font-black uppercase tracking-wider">FOX Live n8n</p></div>
+            <h2 className="mt-1 text-lg font-black">{isAr ? "محرك n8n الحقيقي" : "Live n8n Automation Console"}</h2>
+            <p className="mt-1 text-[11px] text-white/75">{isAr ? "وصول Super Admin فقط — افتح الـ Editor الحقيقي وشاهد الـ Workflows والـ Executions." : "Super Admin only — open the real editor to inspect workflows and executions."}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setShowConsole((v) => !v)} disabled={!n8nUrl} className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-4 py-2.5 text-xs font-black hover:bg-white/25 disabled:opacity-40"><Workflow className="h-4 w-4" />{showConsole ? (isAr ? "إخفاء n8n" : "Hide n8n") : (isAr ? "فتح n8n داخل FOX" : "Open n8n in FOX")}</button>
+            {n8nUrl && <a href={n8nUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-black text-indigo-700"><ExternalLink className="h-4 w-4" />{isAr ? "فتح في تبويب" : "Open tab"}</a>}
+          </div>
+        </div>
+      </div>
+      {showConsole && n8nUrl && (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 shadow-xl dark:border-slate-800">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2 text-[10px] font-black text-slate-400"><span>n8n Editor</span><span>{n8nUrl}</span></div>
+          <iframe title="FOX n8n Editor" src={n8nUrl} className="h-[720px] w-full border-0 bg-white" allow="clipboard-read; clipboard-write" />
+        </div>
+      )}
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-4">

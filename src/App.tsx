@@ -63,6 +63,8 @@ import { AdminPayments } from "./components/admin/AdminPayments";
 import { AdminActivationCodes } from "./components/admin/AdminActivationCodes";
 import { AdminTelegramBot } from "./components/admin/AdminTelegramBot";
 import { AdminN8nWorkflows } from "./components/admin/AdminN8nWorkflows";
+import { AdminAgentCenter } from "./components/admin/AdminAgentCenter";
+import { AdminInfrastructure } from "./components/admin/AdminInfrastructure";
 import { AdminSupportTickets } from "./components/admin/AdminSupportTickets";
 import { AdminAuditLogs } from "./components/admin/AdminAuditLogs";
 import { AdminGeminiMonitoring } from "./components/admin/AdminGeminiMonitoring";
@@ -375,6 +377,10 @@ const AppContent: React.FC = () => {
         return <AdminTelegramBot />;
       case "admin_n8n":
         return <AdminN8nWorkflows />;
+      case "admin_agents":
+        return <AdminAgentCenter />;
+      case "admin_infrastructure":
+        return <AdminInfrastructure />;
       case "admin_tickets":
         return <AdminSupportTickets />;
       case "admin_audit_logs":
