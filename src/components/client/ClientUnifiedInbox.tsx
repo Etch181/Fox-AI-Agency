@@ -35,6 +35,7 @@ type Channel =
   | "telegram"
   | "whatsapp"
   | "instagram"
+  | "messenger"
   | "web";
 
 type ConversationStatus =
@@ -113,7 +114,8 @@ export const ClientUnifiedInbox: React.FC = () => {
       "all" |
       "whatsapp" |
       "telegram" |
-      "instagram"
+      "instagram" |
+      "messenger"
     >("all");
 
   const [searchTerm, setSearchTerm] =
@@ -393,6 +395,10 @@ export const ClientUnifiedInbox: React.FC = () => {
       return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
     }
 
+    if (channel === "messenger") {
+      return "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400";
+    }
+
     return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
   };
 
@@ -457,15 +463,6 @@ export const ClientUnifiedInbox: React.FC = () => {
       !humanReply.trim() ||
       sendingHumanReply
     ) {
-      return;
-    }
-
-    if (activeConv.channel !== "telegram") {
-      alert(
-        isAr
-          ? "الرد اليدوي متاح حالياً لمحادثات Telegram فقط."
-          : "Human reply currently supports Telegram conversations only."
-      );
       return;
     }
 
@@ -603,6 +600,7 @@ export const ClientUnifiedInbox: React.FC = () => {
                 "telegram",
                 "whatsapp",
                 "instagram",
+                "messenger",
               ].map((tab) => (
                 <button
                   key={tab}
@@ -621,6 +619,8 @@ export const ClientUnifiedInbox: React.FC = () => {
                     ? isAr
                       ? "الكل"
                       : "All"
+                    : tab === "messenger"
+                    ? "Messenger"
                     : tab
                         .charAt(0)
                         .toUpperCase() +
@@ -736,6 +736,9 @@ export const ClientUnifiedInbox: React.FC = () => {
                       : activeConv.channel ===
                         "instagram"
                       ? "bg-pink-500"
+                      : activeConv.channel ===
+                        "messenger"
+                      ? "bg-indigo-500"
                       : "bg-blue-500"
                   }`}
                 >
