@@ -80,4 +80,16 @@
 .animate-fade-in {
   animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+/* Sidebar: desktop must always be visible; mobile alone uses the open state. */
+.fox-sidebar {
+  translate: 0 0 !important;
+}
 
+@media (max-width: 767px) {
+  html[dir="ltr"] .fox-sidebar[data-mobile-open="false"] {
+    translate: -100% 0 !important;
+  }
+  html[dir="rtl"] .fox-sidebar[data-mobile-open="false"] {
+    translate: 100% 0 !important;
+  }
+}
