@@ -72,26 +72,29 @@ export const ClientTelegramToken: React.FC = () => {
     setIsVerifying(true);
     setBotDetails(null);
 
-    // Simulate calling Telegram getMe API or verify format
-    setTimeout(() => {
-      const parts = token.trim().split(":");
-      if (parts.length === 2 && !isNaN(Number(parts[0]))) {
+    try {
+      const response = await fetch(`/api/telegram/workspace/${encodeURIComponent(currentWorkspace.id)}/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: token.trim(), botName: botName.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (data.ok && data.result) {
         setBotDetails({
-          id: Number(parts[0]),
-          first_name: currentWorkspace.name + " AI Bot",
-          username: botName.startsWith("@") ? botName.substring(1) : botName,
+          id: data.result.id,
+          first_name: data.result.first_name || data.result.username || "",
+          username: data.result.username || botName.replace(/^@/, ""),
           can_join_groups: true,
         });
-        updateTelegramBotToken(currentWorkspace.id, token.trim(), botName.trim());
       } else {
-        alert(
-          isAr
-            ? "صيغة Token غير صحيحة. يرجى التأكد من نسخ الـ Token كاملاً من @BotFather"
-            : "Invalid token format. Please ensure you copied the full HTTP API token from @BotFather"
-        );
+        const errorMsg = data.description || (isAr ? "رمز غير صالح. تحقق من BotFather." : "Invalid token. Check BotFather.");
+        alert(isAr ? `صيغة Token غير صحيحة. ${errorMsg}` : `Invalid token format. ${errorMsg}`);
       }
+    } catch (err) {
+      alert(isAr ? "تعذر الاتصال بالخادم للتحقق من التوكن." : "Could not reach server to verify token.");
+    } finally {
       setIsVerifying(false);
-    }, 1000);
+    }
   };
 
   const handleCopyWebhook = () => {
