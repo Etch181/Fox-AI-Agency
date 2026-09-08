@@ -298,7 +298,7 @@ export const ClientMarketingAgent: React.FC = () => {
             <Radio className="h-3 w-3 text-emerald-400" /> {isAr ? "مبني على بيانات حقيقية" : "Real data only"}
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             {
               labelAr: "وضع الموافقة", labelEn: "Approval Mode",
@@ -314,6 +314,16 @@ export const ClientMarketingAgent: React.FC = () => {
               labelAr: "فيسبوك / إنستغرام", labelEn: "Facebook / IG",
               value: mktStatusLoading ? (isAr ? "..." : "...") : ((mktStatus?.platforms?.facebook?.connected ? (isAr ? "متصل" : "Connected") : (isAr ? "غير متصل" : "Not connected")) + "/" + (mktStatus?.platforms?.instagram?.connected ? (isAr ? "متصل" : "Connected") : (isAr ? "غير متصل" : "Not connected"))),
               color: "text-sky-400", icon: <Globe className="h-4 w-4 text-sky-400" />,
+            },
+            {
+              labelAr: "واتساب / مسنجر", labelEn: "WhatsApp / Messenger",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (isAr ? "غير متصل — غير مفعل" : "Not connected — not activated"),
+              color: "text-red-400", icon: <MessageSquare className="h-4 w-4 text-red-400" />,
+            },
+            {
+              labelAr: "تليجرام", labelEn: "Telegram",
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (isAr ? "غير متصل — غير مفعل" : "Not connected — not activated"),
+              color: "text-violet-400", icon: <Send className="h-4 w-4 text-violet-400" />,
             },
             {
               labelAr: "منشورات حديثة (مُنشرة)", labelEn: "Recent Published",

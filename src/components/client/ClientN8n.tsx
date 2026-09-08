@@ -90,6 +90,34 @@ export const ClientN8n: React.FC = () => {
         <div className="mt-3 text-[10px] font-semibold text-amber-700 dark:text-amber-300">{isAr ? "ملاحظة: REAL workflow YwObvos6GEFJ0zmE (5 nodes) — respondToWebhook ثابت. لا تفعيل حتى تأكيد التصميم عبر REST." : "Note: real workflow YwObvos6GEFJ0zmE (5 nodes) — respondToWebhook fixed. Activation deferred until REST design verified."}</div>
       </div>
 
+      {/* Real Automation Activity — workspace-scoped agent execution summary (no simulated metrics) */}
+      <div className="rounded-3xl border border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-slate-50 dark:from-slate-900 dark:to-slate-950 p-5 shadow-sm space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-amber-500/10 flex items-center justify-center"><Activity className="h-5 w-5 text-amber-600" /></div>
+          <div>
+            <h3 className="font-black text-slate-900 dark:text-white">{isAr ? "نشاط التشغيل الآلي — بيانات حقيقية" : "Automation Activity — Real Data Only"}</h3>
+            <p className="text-[11px] text-slate-500 font-medium">{isAr ? "من سجل الوكلاء (agent registry) — لا بيانات وهمية أو محاكاة." : "From agent registry — no simulated or demo execution data."}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {agents.map((agent) => (
+            <div key={agent.id} className="rounded-xl border border-amber-100 dark:border-amber-900 bg-white/70 dark:bg-slate-900/70 px-3 py-3">
+              <div className="flex items-center justify-between mb-1"><span className="text-[10px] font-black uppercase text-slate-400">{ROLE_LABELS[agent.role]?.[isAr ? "ar" : "en"] || agent.role}</span>
+                <span className={`h-2 w-2 rounded-full ${agent.status === "running" ? "bg-amber-400 animate-pulse" : agent.status === "error" ? "bg-red-500" : "bg-emerald-500"}`} />
+              </div>
+              <div className="text-sm font-black text-slate-900 dark:text-white truncate">{agent.name.replace(/^FOX-/, "")}</div>
+              <div className="text-[11px] text-slate-500 mt-1">{agent.description || "—"}</div>
+              <div className="mt-2 flex items-center gap-3 text-[11px] font-bold"><span className="text-emerald-600">✓ {agent.successCount || 0}</span><span className="text-red-500">✕ {agent.failureCount || 0}</span>{agent.lastExecutionAt ? <span className="text-slate-400">{new Date(agent.lastExecutionAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</span> : null}</div>
+            </div>
+          ))}
+          {agents.length === 0 && <div className="sm:col-span-2 lg:col-span-3 text-xs text-slate-500 font-medium">{isAr ? "لا توجد بيانات تنفيذه واقعية مسجلة بعد — الوكلاء موجودون في السجل لكن لم يسجلوا تنفيذات." : "No real execution records yet — agents exist in registry with no executions logged."}</div>}
+        </div>
+        <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          <span>{isAr ? "n8n 2.35.0 REST — التنفيذ مؤجل حتى التحقق الخارجي. لا بيانات وهمية في هذه الشاشة." : "n8n 2.35.0 REST — execution deferred until external verification. No fake data shown here."}</span>
+        </div>
+      </div>
+
       <div className="rounded-2xl bg-slate-900 text-white p-5 flex gap-3 items-start"><LockKeyhole className="h-5 w-5 text-amber-400 mt-0.5" /><div><p className="font-black text-sm">{isAr ? "n8n Engine محمي" : "n8n Engine Protected"}</p><p className="text-xs text-slate-300 mt-1">{isAr ? "صاحب المنشأة يرى حالة الوكلاء ونتائج أعمالهم فقط. لا توجد واجهة لتعديل أو تشغيل أو حذف workflows." : "Workspace owners can see agent status and outcomes only. There is no workflow edit, run, or delete control."}</p></div></div>
     </div>
   );
