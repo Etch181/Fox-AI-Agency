@@ -75,6 +75,21 @@ export const ClientN8n: React.FC = () => {
         </div>
       </div>
 
+      <div className="rounded-3xl border border-indigo-200 dark:border-indigo-800 bg-gradient-to-br from-indigo-50 to-slate-50 dark:from-slate-900 dark:to-slate-950 p-5">
+        <div className="flex items-center gap-3 mb-3"><div className="h-10 w-10 rounded-xl bg-indigo-600 flex items-center justify-center"><Bot className="h-5 w-5 text-white" /></div><div><h3 className="font-black text-slate-900 dark:text-white">{isAr ? "سجل n8n — حالة التنظيم (غير مفعل)" : "n8n Registry — Automation Center Status (Not Activated)"}</h3><p className="text-[11px] text-slate-500">{isAr ? "ملفات Workflows مؤكدة — التنفيذ مؤجل حسب التصميم المعتمد (n8n 2.35.0 REST)" : "Verified workflow files present — execution deferred per verified n8n 2.35.0 REST design"}</p></div></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+          {[
+            "00-fox-unified-agent-router","01-incoming-channel-message","02-new-lead-crm-sync",
+            "03-appointment-reminder","04-appointment-follow-up","05-escalation-human",
+            "06-facebook-comment","07-marketing-scheduled-post","08-daily-workspace-summary",
+            "09-failed-integration-alert","10-subscription-credit-warning"
+          ].map((w) => (
+            <div key={w} className="rounded-xl border border-indigo-100 dark:border-indigo-900 bg-white/70 dark:bg-slate-900/70 px-3 py-2 flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /><span className="font-medium text-slate-700 dark:text-slate-200 truncate" title={w}>{w}</span><span className="ml-auto text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-1.5 rounded">{isAr ? "مؤجل" : "DEFERRED"}</span></div>
+          ))}
+        </div>
+        <div className="mt-3 text-[10px] font-semibold text-amber-700 dark:text-amber-300">{isAr ? "ملاحظة: REAL workflow YwObvos6GEFJ0zmE (5 nodes) — respondToWebhook ثابت. لا تفعيل حتى تأكيد التصميم عبر REST." : "Note: real workflow YwObvos6GEFJ0zmE (5 nodes) — respondToWebhook fixed. Activation deferred until REST design verified."}</div>
+      </div>
+
       <div className="rounded-2xl bg-slate-900 text-white p-5 flex gap-3 items-start"><LockKeyhole className="h-5 w-5 text-amber-400 mt-0.5" /><div><p className="font-black text-sm">{isAr ? "n8n Engine محمي" : "n8n Engine Protected"}</p><p className="text-xs text-slate-300 mt-1">{isAr ? "صاحب المنشأة يرى حالة الوكلاء ونتائج أعمالهم فقط. لا توجد واجهة لتعديل أو تشغيل أو حذف workflows." : "Workspace owners can see agent status and outcomes only. There is no workflow edit, run, or delete control."}</p></div></div>
     </div>
   );
