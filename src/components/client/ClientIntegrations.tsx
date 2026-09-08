@@ -208,8 +208,10 @@ export const ClientIntegrations: React.FC = () => {
           {isAr ? "هل تستخدم نظاماً داخلياً (ERP) أو CRM خاص؟ يمكنك ربط نظامك عبر Webhook لاستقبال وتحديث البيانات لحظياً." : "Using an internal ERP or custom CRM? Connect your system via Webhook to receive and update data in real-time."}
         </p>
         <button
-          className="px-5 py-2.5 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition"
+          onClick={() => alert(isAr ? "تحتاج إلى إعداد Webhook مخصص عبر إدارة الوكالة — تواصل مع إدارة FOX لتفعيل التكامل عبر API." : "Custom Webhook integration requires agency admin setup — contact FOX admin to enable API integration.")}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition"
         >
+          {isAr ? "إعداد Webhook مخصص (API)" : "Configure Custom Webhook (API)"}
         </button>
       </div>
     </div>
