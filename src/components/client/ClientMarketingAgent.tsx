@@ -77,6 +77,10 @@ export const ClientMarketingAgent: React.FC = () => {
   } | null>(null);
   const [mktStatusLoading, setMktStatusLoading] = useState(true);
 
+  // Real agent activity for Automation Activity inside Marketing FOX (workspace-scoped, no fake data)
+  const [agentActivities, setAgentActivities] = useState<Array<{id:string; message:string; severity?:string; createdAt:string}>>([]);
+  const [agentActivitiesLoading, setAgentActivitiesLoading] = useState(true);
+
   // Fetch Saved Posts from Firestore
   useEffect(() => {
     fetchPostsHistory();
@@ -99,6 +103,23 @@ export const ClientMarketingAgent: React.FC = () => {
         setMktStatus(null);
         setMktStatusLoading(false);
       });
+    return () => { cancelled = true; };
+  }, [currentWorkspace?.id]);
+
+  // Fetch real workspace agent activities (same endpoint ClientN8n uses)
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    let cancelled = false;
+    setAgentActivitiesLoading(true);
+    fetch(`/api/agents/activity?workspaceId=${encodeURIComponent(currentWorkspace.id)}`, { headers: { 'Content-Type': 'application/json' } })
+      .then((r) => r.json().catch(() => null))
+      .then((data: any) => {
+        if (cancelled) return;
+        const acts = Array.isArray(data?.activities) ? data.activities : [];
+        setAgentActivities(acts.slice(0, 4));
+        setAgentActivitiesLoading(false);
+      })
+      .catch(() => { if (!cancelled) { setAgentActivities([]); setAgentActivitiesLoading(false); } });
     return () => { cancelled = true; };
   }, [currentWorkspace?.id]);
 
@@ -347,6 +368,25 @@ export const ClientMarketingAgent: React.FC = () => {
             </div>
           ))}
         </div>
+        {agentActivities.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-white/10">
+            <div className="flex items-center gap-2 text-[10px] font-bold text-amber-200 mb-2">
+              <Activity className="h-3.5 w-3.5" />
+              <span>{isAr ? "آخر أنشطة التشغيل الآلي (من سجل الوكلاء)" : "Recent Automation Activity (from agent registry)"}</span>
+            </div>
+            <div className="space-y-2">
+              {agentActivities.map((a) => (
+                <div key={a.id} className="rounded-xl bg-white/5 border border-white/10 px-3 py-2 flex items-start gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full mt-1 shrink-0 ${a.severity === 'error' ? 'bg-rose-400' : a.severity === 'warn' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-slate-100 leading-snug truncate">{a.message}</p>
+                    <p className="text-[10px] text-slate-400">{new Date(a.createdAt).toLocaleString(isAr ? 'ar-EG' : 'en-US')}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-amber-300/90 font-medium">
           <Settings className="h-3.5 w-3.5" />
           <span>{isAr ? "ن8n workflow: 07-marketing-scheduled-post.json — التنفيذ عبر n8n مع مدخل MANUAL_APPROVAL / AUTO_PUBLISH." : "n8n workflow: 07-marketing-scheduled-post.json — execution via n8n with MANUAL_APPROVAL / AUTO_PUBLISH mode."}</span>
