@@ -76,6 +76,7 @@ export const ClientN8n: React.FC = () => {
             <h3 className="mt-3 font-black text-slate-900 dark:text-white">{agent.name.replace(/^FOX-/, "")}</h3>
             <p className="mt-1 text-xs text-slate-500 min-h-8">{agent.description || label}</p>
             <div className="mt-4 flex items-center justify-between text-[11px] font-bold"><span className={running ? "text-amber-600" : "text-emerald-600"}>{running ? (isAr ? "يعمل الآن" : "Running") : (isAr ? "جاهز" : "Ready")}</span><span className="text-slate-400">✓ {agent.successCount || 0} / ✕ {agent.failureCount || 0}</span></div>
+            {agent.lastExecutionAt ? <div className="mt-2 text-[10px] text-slate-400">{isAr ? "آخر تنفيذ: " : "Last run: "}<span className="font-semibold text-slate-600 dark:text-slate-300">{new Date(agent.lastExecutionAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</span>{agent.lastExecutionStatus ? <span className="ml-2 font-bold text-amber-600">({agent.lastExecutionStatus})</span> : null}</div> : null}
           </div>;
         })}
         {!loading && agents.length === 0 && <div className="md:col-span-2 xl:col-span-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{isAr ? "لا توجد بيانات Agents مسجلة بعد." : "No agent registry data is available yet."}</div>}
@@ -135,7 +136,11 @@ export const ClientN8n: React.FC = () => {
 <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
         <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3"><Activity className="h-5 w-5 text-violet-500" /><div><h3 className="font-black text-slate-900 dark:text-white">{isAr ? "آخر نشاط للوكلاء" : "Recent Agent Activity"}</h3><p className="text-xs text-slate-500">{isAr ? "الأحداث الخاصة بمنشأتك فقط" : "Only activity associated with this workspace"}</p></div></div>
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
-          {activities.map((item) => <div key={item.id} className="p-4 flex items-start gap-3"><Clock3 className="h-4 w-4 text-slate-400 mt-0.5" /><div className="min-w-0"><p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{item.message}</p><p className="text-[10px] text-slate-400 mt-1">{new Date(item.createdAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</p></div></div>)}
+          {activities.map((item) => {
+            const agent = agents.find(a => a.id === item.agentId);
+            const agentLabel = agent ? (ROLE_LABELS[agent.role]?.[isAr ? "ar" : "en"] || agent.role) + " — " + agent.name.replace(/^FOX-/, "") : null;
+            return <div key={item.id} className="p-4 flex items-start gap-3"><Clock3 className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" /><div className="min-w-0"><div className="flex items-center gap-2">{agentLabel ? <span className="text-[10px] font-bold uppercase tracking-wide text-violet-600 dark:text-violet-300">{agentLabel}</span> : null}<span className="text-[10px] font-bold text-amber-600">{item.severity || "info"}</span></div><p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{item.message}</p><p className="text-[10px] text-slate-400 mt-1">{new Date(item.createdAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</p></div></div>;
+          })}
           {!loading && activities.length === 0 && <div className="p-8 text-center text-sm text-slate-500">{isAr ? "لا يوجد نشاط مسجل لمنشأتك حتى الآن." : "No activity recorded for this workspace yet."}</div>}
         </div>
       </div>
