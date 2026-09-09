@@ -33,6 +33,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { aiAgentService } from "./src/services/aiAgentService";
 import { ensureWorkspaceAgentRoutingDefaults, getWorkspaceAgentRouting, routeWorkspaceAgent, setWorkspaceAgentRouting } from "./src/services/workspaceAgentService";
+import { indexWorkspaceKnowledge, searchKnowledge, formatKnowledgeResults } from "./src/services/qdrantKnowledgeService";
 import { sharedMemoryService } from "./src/services/sharedMemoryService";
 import { conversationService } from "./src/services/conversationService";
 import { workspaceCrmService } from "./src/services/workspaceCrmService";
@@ -1567,6 +1568,33 @@ app.post(
   })
 );
 
+
+app.post(
+  "/api/knowledge/qdrant/index",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("index workspace knowledge in qdrant", async (req: any, res: any) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!trusted) return;
+    const facts = Array.isArray(req.body?.facts) ? req.body.facts : [];
+    const results = await indexWorkspaceKnowledge(workspaceId, facts);
+    return res.json({ success: true, workspaceId, indexed: results.filter((r: any) => r.indexed).length, results });
+  }),
+);
+
+app.post(
+  "/api/knowledge/qdrant/search",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("search workspace knowledge in qdrant", async (req: any, res: any) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const query = String(req.body?.query || "").trim();
+    const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!trusted) return;
+    if (!query) return res.status(400).json({ success: false, error: "query is required" });
+    const results = await searchKnowledge(workspaceId, query, 5);
+    return res.json({ success: true, workspaceId, results, context: formatKnowledgeResults(results) });
+  }),
+);
 
 app.post(
   "/api/ai/extract-knowledge",
