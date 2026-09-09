@@ -317,12 +317,21 @@ export const ClientMarketingAgent: React.FC = () => {
             },
             {
               labelAr: "واتساب / مسنجر", labelEn: "WhatsApp / Messenger",
-              value: mktStatusLoading ? (isAr ? "..." : "...") : (isAr ? "غير متصل — غير مفعل" : "Not connected — not activated"),
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (() => {
+                const w = currentWorkspace?.whatsappBotStatus;
+                const m = currentWorkspace?.metaPageId;
+                const connected = (w === 'connected') || !!m;
+                return (isAr ? (connected ? "متصل" : "غير متصل") : (connected ? "Connected" : "Not connected")) + (m ? (isAr ? " (Meta)" : " (Meta)") : "") + (isAr ? " — عبر n8n" : " — via n8n");
+              })(),
               color: "text-red-400", icon: <MessageSquare className="h-4 w-4 text-red-400" />,
             },
             {
               labelAr: "تليجرام", labelEn: "Telegram",
-              value: mktStatusLoading ? (isAr ? "..." : "...") : (isAr ? "غير متصل — غير مفعل" : "Not connected — not activated"),
+              value: mktStatusLoading ? (isAr ? "..." : "...") : (() => {
+                const t = currentWorkspace?.telegramBotStatus;
+                const connected = t === 'connected';
+                return (isAr ? (connected ? "متصل" : "غير متصل") : (connected ? "Connected" : "Not connected")) + (isAr ? " — عبر n8n / Agent" : " — via n8n / Agent");
+              })(),
               color: "text-violet-400", icon: <Send className="h-4 w-4 text-violet-400" />,
             },
             {

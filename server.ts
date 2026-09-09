@@ -981,6 +981,32 @@ async function handleMessengerDirectReply({
   const workspace = workspaceIdHint ? getWorkspaceByMetaPageId(pageId || "") : undefined;
 
   let replyText = "";
+  let handoffRequired = false;
+  let handoffReason = "";
+
+  let inboxConversation: any = null;
+  const messengerWorkspaceId = String(workspace?.id || "").trim();
+  const messengerSessionId = `messenger:${messengerWorkspaceId}:${String(senderPsid || "unknown")}`;
+
+  if (messengerWorkspaceId && senderPsid) {
+    inboxConversation = await conversationService.getOrCreateConversation(messengerWorkspaceId, {
+      sessionId: messengerSessionId,
+      channel: "messenger",
+      externalChatId: String(senderPsid),
+      customerName: String(senderPsid),
+    });
+    await conversationService.appendMessage(messengerWorkspaceId, inboxConversation.id, {
+      sessionId: messengerSessionId,
+      channel: "messenger",
+      sender: "customer",
+      text: userMessage,
+    });
+    if (inboxConversation.assignedTo === "human") {
+      console.log(`👤 [FOX Human Takeover] Messenger AI suppressed | Workspace=${messengerWorkspaceId} | Conversation=${inboxConversation.id}`);
+      return { success: true, replyText: "", handedOff: true };
+    }
+  }
+
   try {
     const aiClientAvailable = !!getGeminiClient();
     if (workspace && workspace.id && aiClientAvailable) {
@@ -1000,6 +1026,8 @@ async function handleMessengerDirectReply({
             sessionId: `messenger:${workspace.id}:${String(senderPsid || 'unknown')}`,
           });
           replyText = result?.response || result?.aiResponse || "";
+          handoffRequired = result?.handoffRequired === true;
+          handoffReason = String(result?.handoffReason || "AI could not safely complete the request");
         } else {
           // Fallback to Gemini when central agent service unavailable
           const ai = getGeminiClient();
@@ -1036,27 +1064,24 @@ async function handleMessengerDirectReply({
     replyText = `أهلاً بك! 🌸 شرفتنا برسالتك في FOX AI Agency. يسعدنا جداً مساعدتك والرد على كافة استفساراتك حول حلولنا بالذكاء الاصطناعي والتسويق الرقمي! كيف يمكننا مساعدتك اليوم؟ ✨`;
   }
 
-  // Persist inbound message and AI response via conversation/inbox when workspace is mapped (workplace isolation enforced)
-  if (workspace && workspace.id && senderPsid) {
-    try {
-      // Conversation persistence: use workspace-scoped session (messenger format) to avoid cross-workspace collision
-      const sessionId = `messenger:${String(workspace.id || workspaceIdHint)}:${String(senderPsid || 'unknown')}`;
-      const conversationService = (await import('./src/services/conversationService')).conversationService;
-      await conversationService.getOrCreateConversation(workspace.id, {
-        sessionId,
+  if (inboxConversation && messengerWorkspaceId) {
+    if (handoffRequired) {
+      const handoffText = "هفهمك من موظف مختص 👤 تم تحويل المحادثة للعنصر البشري، ومش هيرد البوت تلقائياً على الرسائل الجديدة لحد ما الموظف ينهي المتابعة.";
+      await markConversationHumanNeeded(messengerWorkspaceId, inboxConversation.id, handoffReason);
+      await conversationService.appendMessage(messengerWorkspaceId, inboxConversation.id, {
+        sessionId: messengerSessionId,
         channel: "messenger",
-        externalChatId: String(senderPsid || 'unknown'),
-        customerName: String(senderPsid || 'unknown'),
+        sender: "system",
+        text: handoffText,
       });
-      await conversationService.appendMessage(workspace.id, `messenger_${String(senderPsid || 'unknown')}`, {
-        sessionId,
+      replyText = handoffText;
+    } else {
+      await conversationService.appendMessage(messengerWorkspaceId, inboxConversation.id, {
+        sessionId: messengerSessionId,
         channel: "messenger",
-        sender: "customer",
-        text: userMessage,
-        externalMessageId: String(senderPsid || 'unknown'),
+        sender: "ai",
+        text: replyText,
       });
-    } catch (inboxErr: any) {
-      console.warn("[Messenger Inbound] Unified Inbox persistence skipped (optional):", inboxErr?.message || inboxErr);
     }
   }
 
@@ -1251,6 +1276,91 @@ app.post("/api/meta/auto-reply-comment", async (req, res) => {
   }
 });
 
+// ==========================================================
+// INSTAGRAM DIRECT MESSAGES -> UNIFIED INBOX
+// ==========================================================
+
+async function handleInstagramDirectWebhookEntry(entry: any) {
+  const accountId = String(entry?.id || "").trim();
+  const workspace = getWorkspaceByInstagramBusinessAccountId(accountId);
+  if (!workspace) {
+    console.warn(`[Instagram Webhook] Unmapped business account=${accountId || "missing"}`);
+    return;
+  }
+
+  const access = requireWorkspaceFeature(workspace, "instagram_messaging");
+  if (!access.allowed) return;
+
+  const messages = Array.isArray(entry?.messaging) ? entry.messaging : [];
+  for (const event of messages) {
+    const senderId = String(event?.sender?.id || "").trim();
+    const text = String(event?.message?.text || "").trim();
+    const messageId = String(event?.message?.mid || event?.message?.id || "").trim();
+    if (!senderId || !text || !messageId) continue;
+    if (String(event?.message?.is_echo || "").toLowerCase() === "true") continue;
+
+    const sessionId = `instagram:${workspace.id}:${senderId}`;
+    const conversation = await conversationService.getOrCreateConversation(String(workspace.id), {
+      sessionId,
+      channel: "instagram",
+      externalChatId: senderId,
+      customerName: senderId,
+    });
+
+    await conversationService.appendMessage(String(workspace.id), conversation.id, {
+      sessionId,
+      channel: "instagram",
+      sender: "customer",
+      text,
+      externalMessageId: messageId,
+    });
+
+    if (conversation.assignedTo === "human") {
+      console.log(`👤 [FOX Human Takeover] Instagram AI suppressed | Workspace=${workspace.id} | Conversation=${conversation.id}`);
+      continue;
+    }
+
+    const runtimeWorkspace = await withWorkspaceRuntimeIntegrations(workspace);
+    const result = await aiAgentService.generateChatResponse({
+      workspace: runtimeWorkspace,
+      message: text,
+      channel: "instagram",
+      sessionId,
+    });
+
+    if (result?.handoffRequired) {
+      const handoffText = "هفهمك من موظف مختص 👤 تم تحويل المحادثة للعنصر البشري، ومش هيرد البوت تلقائياً على الرسائل الجديدة لحد ما الموظف ينهي المتابعة.";
+      await markConversationHumanNeeded(String(workspace.id), conversation.id, String(result.handoffReason || "AI could not safely complete the request"));
+      await conversationService.appendMessage(String(workspace.id), conversation.id, {
+        sessionId,
+        channel: "instagram",
+        sender: "system",
+        text: handoffText,
+      });
+      const { sendInstagramDirectMessage } = await import("./src/services/instagramService.ts");
+      await sendInstagramDirectMessage(String(workspace.id), senderId, handoffText);
+      continue;
+    }
+
+    const replyText = String(result?.response || result?.aiResponse || "").trim();
+    if (!replyText) continue;
+    const { sendInstagramDirectMessage } = await import("./src/services/instagramService.ts");
+    const sendResult = await sendInstagramDirectMessage(String(workspace.id), senderId, replyText);
+    if (!sendResult.success) {
+      console.warn(`[Instagram Webhook] Reply failed | Workspace=${workspace.id} | Error=${sendResult.error || "unknown"}`);
+      continue;
+    }
+
+    await conversationService.appendMessage(String(workspace.id), conversation.id, {
+      sessionId,
+      channel: "instagram",
+      sender: "ai",
+      text: replyText,
+      externalMessageId: String(sendResult.data?.message_id || sendResult.data?.id || "") || undefined,
+    });
+  }
+}
+
 // Meta Webhook Verification (OPTIONS preflight)
 app.options(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/facebook", "/webhook"], (_req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1323,6 +1433,12 @@ app.post(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/faceb
   try {
     const body = req.body;
     console.log("[Meta Webhook] Incoming POST event");
+
+    if (body?.object === "instagram" && Array.isArray(body.entry)) {
+      for (const entry of body.entry) {
+        await handleInstagramDirectWebhookEntry(entry);
+      }
+    }
 
     if (body?.object === "page" && Array.isArray(body.entry)) {
       for (const entry of body.entry) {
@@ -4151,6 +4267,14 @@ function getWorkspaceByMetaPageId(pageId: string) {
   );
 }
 
+function getWorkspaceByInstagramBusinessAccountId(accountId: string) {
+  const cleanAccountId = String(accountId || "").trim();
+  if (!cleanAccountId) return undefined;
+  return registeredWorkspacesStore.find(
+    (workspace) => String(workspace.instagramBusinessAccountId || "").trim() === cleanAccountId
+  );
+}
+
 async function withWorkspaceRuntimeIntegrations(workspace: any) {
   const workspaceId = String(workspace?.id || "");
 
@@ -4224,7 +4348,11 @@ async function generateWorkspaceTelegramReply(
       `🔒 [FOX Telegram] Subscription blocked | Workspace=${workspace?.id}`
     );
 
-    return "خدمة Telegram غير متاحة ضمن الباقة الحالية للمنشأة. يرجى التواصل مع إدارة المنشأة أو ترقية الاشتراك.";
+    return {
+      text: "خدمة Telegram غير متاحة ضمن الباقة الحالية للمنشأة. يرجى التواصل مع إدارة المنشأة أو ترقية الاشتراك.",
+      handoffRequired: false,
+      handoffReason: "telegram_feature_not_in_plan",
+    };
   }
 
   const result = await aiAgentService.generateChatResponse({
@@ -4237,11 +4365,11 @@ async function generateWorkspaceTelegramReply(
     sessionId: `telegram:${workspace.id}:${chatId}`,
   });
 
-  return (
-    result?.response ||
-    result?.aiResponse ||
-    "شكراً لتواصلك معنا. كيف يمكننا مساعدتك؟"
-  );
+  return {
+    text: result?.response || result?.aiResponse || "شكراً لتواصلك معنا. كيف يمكننا مساعدتك؟",
+    handoffRequired: result?.handoffRequired === true,
+    handoffReason: result?.handoffReason || "AI could not safely complete the request",
+  };
 }
 
 const workspaceTelegramRuntimeTokens =
@@ -4746,11 +4874,41 @@ async function handleWorkspaceTelegramUpdate(
   }
 
   // Normal tenant AI flow
-  const replyText = await generateWorkspaceTelegramReply(
+  const replyResult = await generateWorkspaceTelegramReply(
     workspace,
     chatId,
     userMsg
   );
+  const replyText = String(replyResult?.text || "").trim();
+
+  if (replyResult?.handoffRequired) {
+    const handoffText =
+      "هفهمك من موظف مختص 👤 تم تحويل المحادثة للعنصر البشري، ومش هيرد البوت تلقائياً على الرسائل الجديدة لحد ما الموظف ينهي المتابعة.";
+
+    await markConversationHumanNeeded(
+      String(workspace.id),
+      inboxConversation.id,
+      String(replyResult.handoffReason || "AI could not safely complete the request"),
+    );
+
+    await conversationService.appendMessage(
+      String(workspace.id),
+      inboxConversation.id,
+      {
+        sessionId: telegramSessionId,
+        channel: "telegram",
+        sender: "system",
+        text: handoffText,
+      }
+    );
+
+    await callWorkspaceTelegramApi(token, "sendMessage", {
+      chat_id: chatId,
+      text: handoffText,
+    });
+
+    return;
+  }
 
   // Attach the actual AI reply to the newly-created complaint.
   if (createdComplaintId) {
@@ -5807,7 +5965,11 @@ async function generateWorkspaceWhatsAppReply(
       `🔒 [FOX WhatsApp] Subscription blocked | Workspace=${workspace?.id}`
     );
 
-    return "خدمة WhatsApp غير متاحة ضمن الباقة الحالية للمنشأة.";
+    return {
+      text: "خدمة WhatsApp غير متاحة ضمن الباقة الحالية للمنشأة.",
+      handoffRequired: false,
+      handoffReason: "whatsapp_feature_not_in_plan",
+    };
   }
 
   const result =
@@ -5822,11 +5984,11 @@ async function generateWorkspaceWhatsAppReply(
         `whatsapp:${workspace.id}:${customerNumber}`,
     });
 
-  return (
-    result?.response ||
-    result?.aiResponse ||
-    "شكراً لتواصلك معنا. كيف يمكننا مساعدتك؟"
-  );
+  return {
+    text: result?.response || result?.aiResponse || "شكراً لتواصلك معنا. كيف يمكننا مساعدتك؟",
+    handoffRequired: result?.handoffRequired === true,
+    handoffReason: result?.handoffReason || "AI could not safely complete the request",
+  };
 }
 
 async function claimWhatsAppMessage(
@@ -6013,12 +6175,60 @@ async function processWorkspaceWhatsAppWebhook(
         );
 
         try {
-          const replyText =
-            await generateWorkspaceWhatsAppReply(
-              workspace,
-              customerNumber,
-              userMsg
-            );
+          const whatsappSessionId = `whatsapp:${workspace.id}:${customerNumber}`;
+          const inboxConversation = await conversationService.getOrCreateConversation(
+            workspaceId,
+            {
+              sessionId: whatsappSessionId,
+              channel: "whatsapp",
+              externalChatId: customerNumber,
+              customerName: customerNumber,
+              customerPhone: customerNumber,
+            },
+          );
+
+          await conversationService.appendMessage(workspaceId, inboxConversation.id, {
+            sessionId: whatsappSessionId,
+            channel: "whatsapp",
+            sender: "customer",
+            text: userMsg,
+            externalMessageId: messageId,
+          });
+
+          if (inboxConversation.assignedTo === "human") {
+            console.log(`👤 [FOX Human Takeover] WhatsApp AI suppressed | Workspace=${workspaceId} | Conversation=${inboxConversation.id}`);
+            continue;
+          }
+
+          const replyResult = await generateWorkspaceWhatsAppReply(
+            workspace,
+            customerNumber,
+            userMsg,
+          );
+          const replyText = String(replyResult?.text || "").trim();
+
+          if (replyResult?.handoffRequired) {
+            const handoffText = "هفهمك من موظف مختص 👤 تم تحويل المحادثة للعنصر البشري، ومش هيرد البوت تلقائياً على الرسائل الجديدة لحد ما الموظف ينهي المتابعة.";
+            await markConversationHumanNeeded(workspaceId, inboxConversation.id, String(replyResult.handoffReason || "AI could not safely complete the request"));
+            await conversationService.appendMessage(workspaceId, inboxConversation.id, {
+              sessionId: whatsappSessionId,
+              channel: "whatsapp",
+              sender: "system",
+              text: handoffText,
+            });
+            await callWhatsAppGraphApi(`${encodeURIComponent(incomingPhoneNumberId)}/messages`, accessToken, {
+              method: "POST",
+              body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: customerNumber, type: "text", text: { preview_url: false, body: handoffText } }),
+            });
+            continue;
+          }
+
+          await conversationService.appendMessage(workspaceId, inboxConversation.id, {
+            sessionId: whatsappSessionId,
+            channel: "whatsapp",
+            sender: "ai",
+            text: replyText,
+          });
 
           const sendResult =
             await callWhatsAppGraphApi(
@@ -6677,6 +6887,101 @@ app.delete(
 
 
 // ==========================================================
+// UNIFIED INBOX - CHANNEL DELIVERY + HUMAN HANDOFF
+// ==========================================================
+
+async function sendUnifiedInboxHumanReply(workspace: any, conversation: any, text: string) {
+  const workspaceId = String(workspace?.id || "").trim();
+  const channel = String(conversation?.channel || "").toLowerCase();
+  const recipient = String(conversation?.externalChatId || conversation?.customerId || "").trim();
+  if (!workspaceId || !recipient) return { success: false, error: "RECIPIENT_MISSING" };
+
+  if (channel === "telegram") {
+    const token = await getWorkspaceTelegramRuntimeToken(workspace);
+    if (!token) return { success: false, error: "TELEGRAM_NOT_CONNECTED" };
+    const result = await callWorkspaceTelegramApi(token, "sendMessage", { chat_id: recipient, text });
+    if (!result?.ok) return { success: false, error: result?.description || "TELEGRAM_SEND_FAILED" };
+    return { success: true, externalMessageId: result?.result?.message_id ? String(result.result.message_id) : undefined };
+  }
+
+  if (channel === "instagram") {
+    const { sendInstagramDirectMessage } = await import("./src/services/instagramService.ts");
+    const result = await sendInstagramDirectMessage(workspaceId, recipient, text);
+    return result.success
+      ? { success: true, externalMessageId: String(result.data?.message_id || result.data?.id || "") || undefined }
+      : { success: false, error: result.error || "INSTAGRAM_SEND_FAILED" };
+  }
+
+  if (channel === "whatsapp") {
+    const token = await getWorkspaceSecret(workspaceId, "whatsappAccessToken");
+    const phoneNumberId = String(workspace?.whatsappPhoneNumberId || "").trim();
+    if (!token || !phoneNumberId) return { success: false, error: "WHATSAPP_NOT_CONNECTED" };
+    const result = await callWhatsAppGraphApi(`${encodeURIComponent(phoneNumberId)}/messages`, token, {
+      method: "POST",
+      body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: recipient, type: "text", text: { preview_url: false, body: text } }),
+    });
+    if (!result.ok) return { success: false, error: "WHATSAPP_SEND_FAILED" };
+    return { success: true, externalMessageId: String(result.data?.messages?.[0]?.id || "") || undefined };
+  }
+
+  if (channel === "messenger" || channel === "facebook") {
+    const token = await getWorkspaceSecret(workspaceId, "facebookPageAccessToken");
+    if (!token) return { success: false, error: "MESSENGER_NOT_CONNECTED" };
+    try {
+      const response = await fetch("https://graph.facebook.com/v19.0/me/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient: { id: recipient }, message: { text }, access_token: token }),
+      });
+      const data: any = await response.json();
+      if (!response.ok || data?.error) return { success: false, error: data?.error?.message || "MESSENGER_SEND_FAILED" };
+      return { success: true, externalMessageId: String(data?.message_id || data?.id || "") || undefined };
+    } catch {
+      return { success: false, error: "MESSENGER_SEND_FAILED" };
+    }
+  }
+
+  return { success: false, error: "CHANNEL_NOT_SUPPORTED" };
+}
+
+async function markConversationHumanNeeded(workspaceId: string, conversationId: string, reason: string) {
+  const now = new Date().toISOString();
+  await conversationService.setAssignment(workspaceId, conversationId, "human", "human_needed");
+  await adminDb.collection("workspaces").doc(workspaceId).collection("conversations").doc(conversationId).set({
+    humanHandoff: true,
+    humanHandoffReason: reason,
+    humanHandoffAt: now,
+    updatedAt: now,
+  }, { merge: true });
+}
+
+// ==========================================================
+// UNIFIED INBOX - MANUAL HUMAN TAKEOVER
+// ==========================================================
+
+app.post("/api/conversations/:conversationId/takeover", authenticateFirebaseRequest, async (req: any, res) => {
+  try {
+    const conversationId = String(req.params.conversationId || "").trim();
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const reason = String(req.body?.reason || "manual_human_takeover").trim();
+    if (!workspaceId || !conversationId) return res.status(400).json({ success: false, code: "INVALID_CONVERSATION_REQUEST" });
+
+    const workspace = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!workspace) return;
+    const conversation = await conversationService.getConversation(workspaceId, conversationId);
+    if (!conversation || String(conversation.workspaceId) !== workspaceId) {
+      return res.status(404).json({ success: false, code: "CONVERSATION_NOT_FOUND" });
+    }
+
+    await markConversationHumanNeeded(workspaceId, conversationId, reason);
+    return res.json({ success: true, conversationId, assignedTo: "human", status: "human_needed" });
+  } catch (error: any) {
+    console.error("[Unified Inbox Takeover Error]", error?.message || error);
+    return res.status(500).json({ success: false, code: "TAKEOVER_FAILED", error: "Failed to activate human takeover" });
+  }
+});
+
+// ==========================================================
 // UNIFIED INBOX - RETURN CONVERSATION TO AI
 // ==========================================================
 
@@ -6756,6 +7061,9 @@ app.post(
       await conversationRef.update({
         assignedTo: "ai",
         status: "ai_handled",
+        humanHandoff: false,
+        humanHandoffReason: null,
+        humanHandoffAt: null,
         updatedAt: now,
       });
 
@@ -6825,245 +7133,61 @@ app.post(
 
 
 // ==========================================================
-// UNIFIED INBOX - SECURE HUMAN REPLY
+// UNIFIED INBOX - SECURE HUMAN REPLY (ALL CONNECTED CHANNELS)
 // ==========================================================
 
-app.post(
-  "/api/conversations/:conversationId/reply",
-  authenticateFirebaseRequest,
-  async (req: any, res) => {
-    try {
-      const conversationId =
-        String(req.params.conversationId || "").trim();
-
-      const workspaceId =
-        String(req.body?.workspaceId || "").trim();
-
-      const text =
-        String(req.body?.text || "").trim();
-
-      if (!workspaceId) {
-        return res.status(400).json({
-          success: false,
-          code: "WORKSPACE_ID_REQUIRED",
-          error: "workspaceId is required",
-        });
-      }
-
-      if (!conversationId) {
-        return res.status(400).json({
-          success: false,
-          code: "CONVERSATION_ID_REQUIRED",
-          error: "conversationId is required",
-        });
-      }
-
-      if (!text) {
-        return res.status(400).json({
-          success: false,
-          code: "MESSAGE_REQUIRED",
-          error: "Message text is required",
-        });
-      }
-
-      const workspace =
-        requireAuthenticatedWorkspace(
-          req,
-          res,
-          workspaceId
-        );
-
-      if (!workspace) {
-        return;
-      }
-
-      const conversationSnap =
-        await adminDb
-          .collection("workspaces")
-          .doc(workspaceId)
-          .collection("conversations")
-          .doc(conversationId)
-          .get();
-
-      if (!conversationSnap.exists) {
-        return res.status(404).json({
-          success: false,
-          code: "CONVERSATION_NOT_FOUND",
-          error: "Conversation not found",
-        });
-      }
-
-      const conversation: any =
-        conversationSnap.data() || {};
-
-      if (
-        String(conversation.workspaceId) !==
-        String(workspaceId)
-      ) {
-        return res.status(403).json({
-          success: false,
-          code: "CROSS_TENANT_BLOCKED",
-          error: "Conversation does not belong to this workspace",
-        });
-      }
-
-      if (conversation.channel !== "telegram") {
-        return res.status(400).json({
-          success: false,
-          code: "CHANNEL_NOT_SUPPORTED",
-          error: "Human reply currently supports Telegram only",
-        });
-      }
-
-      const telegramAccess =
-        requireWorkspaceFeature(
-          workspace,
-          "telegram"
-        );
-
-      if (!telegramAccess.allowed) {
-        return res
-          .status(telegramAccess.status)
-          .json(telegramAccess);
-      }
-
-      const token =
-        await getWorkspaceTelegramRuntimeToken(
-          workspace
-        );
-
-      if (!token) {
-        return res.status(409).json({
-          success: false,
-          code: "TELEGRAM_NOT_CONNECTED",
-          error: "Telegram bot is not connected",
-        });
-      }
-
-      const chatId =
-        String(
-          conversation.externalChatId ||
-          conversation.customerId ||
-          ""
-        ).trim();
-
-      if (!chatId) {
-        return res.status(400).json({
-          success: false,
-          code: "CHAT_ID_MISSING",
-          error: "Telegram chat ID is missing",
-        });
-      }
-
-      const sendResult =
-        await callWorkspaceTelegramApi(
-          token,
-          "sendMessage",
-          {
-            chat_id: chatId,
-            text,
-          }
-        );
-
-      if (!sendResult?.ok) {
-        return res.status(502).json({
-          success: false,
-          code: "TELEGRAM_SEND_FAILED",
-          error:
-            sendResult?.description ||
-            "Failed to send Telegram message",
-        });
-      }
-
-      await conversationService.appendMessage(
-        workspaceId,
-        conversationId,
-        {
-          sessionId:
-            conversation.sessionId ||
-            `telegram:${workspaceId}:${chatId}`,
-          channel: "telegram",
-          sender: "human",
-          text,
-          externalMessageId:
-            sendResult?.result?.message_id
-              ? String(sendResult.result.message_id)
-              : undefined,
-        }
-      );
-
-      await adminDb
-        .collection("workspaces")
-        .doc(workspaceId)
-        .collection("conversations")
-        .doc(conversationId)
-        .update({
-          assignedTo: "human",
-          status: "open",
-          updatedAt: new Date().toISOString(),
-        });
-
-      // -----------------------------------------------------
-      // FOX CRM EVENT: AI -> HUMAN
-      // First human reply creates takeover event.
-      // Additional human replies do not create duplicates.
-      // -----------------------------------------------------
-      if (
-        String(conversation.assignedTo || "")
-          .toLowerCase() !== "human"
-      ) {
-        const crmLeadId =
-          String(
-            conversation.crmLeadId || ""
-          ).trim();
-
-        if (crmLeadId) {
-          try {
-            await crmEventService.logHumanTakeover({
-              workspaceId,
-              leadId: crmLeadId,
-              channel:
-                conversation.channel ||
-                "telegram",
-              sessionId:
-                conversation.sessionId ||
-                `telegram:${workspaceId}:${chatId}`,
-              conversationId,
-            });
-          } catch (eventError: any) {
-            console.error(
-              `❌ [FOX CRM Event Human Takeover] Workspace=${workspaceId} | Conversation=${conversationId}`,
-              eventError?.message ||
-                eventError
-            );
-          }
-        }
-      }
-
-      console.log(
-        `👤 [Unified Inbox Human Reply] Workspace=${workspaceId} | Conversation=${conversationId} | Chat=${chatId}`
-      );
-
-      return res.json({
-        success: true,
-        sent: true,
-        conversationId,
-        channel: "telegram",
-      });
-
-    } catch (error: any) {
-      console.error(
-        "[Unified Inbox Human Reply Error]",
-        error?.message || error
-      );
-
-      return res.status(500).json({
-        success: false,
-        error: "Failed to send human reply",
-      });
+app.post("/api/conversations/:conversationId/reply", authenticateFirebaseRequest, async (req: any, res) => {
+  try {
+    const conversationId = String(req.params.conversationId || "").trim();
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const text = String(req.body?.text || "").trim();
+    if (!workspaceId || !conversationId || !text) {
+      return res.status(400).json({ success: false, code: "INVALID_REPLY_REQUEST" });
     }
+
+    const workspace = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!workspace) return;
+    const conversation = await conversationService.getConversation(workspaceId, conversationId);
+    if (!conversation || String(conversation.workspaceId) !== workspaceId) {
+      return res.status(404).json({ success: false, code: "CONVERSATION_NOT_FOUND" });
+    }
+
+    const sendResult = await sendUnifiedInboxHumanReply(workspace, conversation, text);
+    if (!sendResult.success) {
+      return res.status(502).json({ success: false, code: sendResult.error || "CHANNEL_SEND_FAILED" });
+    }
+
+    const wasHuman = String(conversation.assignedTo || "").toLowerCase() === "human";
+    await conversationService.appendMessage(workspaceId, conversationId, {
+      sessionId: conversation.sessionId || `${conversation.channel}:${workspaceId}:${conversation.externalChatId || "unknown"}`,
+      channel: conversation.channel,
+      sender: "human",
+      text,
+      externalMessageId: sendResult.externalMessageId,
+    });
+    await conversationService.setAssignment(workspaceId, conversationId, "human", "open");
+
+    const crmLeadId = String((conversation as any).crmLeadId || "").trim();
+    if (!wasHuman && crmLeadId) {
+      try {
+        await crmEventService.logHumanTakeover({
+          workspaceId,
+          leadId: crmLeadId,
+          channel: conversation.channel,
+          sessionId: conversation.sessionId,
+          conversationId,
+        });
+      } catch (eventError: any) {
+        console.warn("[Unified Inbox CRM Takeover Event]", eventError?.message || eventError);
+      }
+    }
+
+    return res.json({ success: true, sent: true, conversationId, channel: conversation.channel, assignedTo: "human" });
+  } catch (error: any) {
+    console.error("[Unified Inbox Human Reply Error]", error?.message || error);
+    return res.status(500).json({ success: false, code: "HUMAN_REPLY_FAILED", error: "Failed to send human reply" });
   }
-);
+});
 
 
 // Client workspace Telegram connection status.
@@ -9020,7 +9144,7 @@ app.get(
   "/api/n8n/status",
   authenticateFirebaseRequest,
   secureAsyncRoute("n8n status", async (req, res) => {
-    const { workspaceId } = (req as any).user || {};
+    const { workspaceId } = req.foxAuth || {};
 
     const enabled = INTEGRATION_FLAGS.n8n;
     const webhookUrlConfigured = Boolean(
@@ -9031,7 +9155,7 @@ app.get(
     );
     const configured = webhookUrlConfigured && webhookSecretConfigured;
 
-    let planAllows = String((req as any).user?.role || "") === "super_admin";
+    let planAllows = String(req.foxAuth?.role || "") === "super_admin";
     if (workspaceId && !planAllows) {
       const trusted = resolveTrustedWorkspace(String(workspaceId));
       if (trusted) {
@@ -9090,7 +9214,7 @@ app.get(
   "/api/admin/infrastructure",
   authenticateFirebaseRequest,
   secureAsyncRoute("admin infrastructure", async (req: any, res) => {
-    if (String(req.user?.role || "") !== "super_admin") {
+    if (String(req.foxAuth?.role || "") !== "super_admin") {
       return res.status(403).json({ success: false, error: "Super Admin access required" });
     }
 

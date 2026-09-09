@@ -37,6 +37,20 @@ export const ClientN8n: React.FC = () => {
 
   useEffect(() => { load(); }, [currentWorkspace?.id]);
 
+
+  const [mktStatus, setMktStatus] = useState<any>(null);
+  const [mktLoading, setMktLoading] = useState(false);
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    let cancelled = false;
+    setMktLoading(true);
+    fetch("/api/marketing/status", { headers: { "Content-Type":"application/json" } })
+      .then((r) => r.json().catch(() => null))
+      .then((d: any) => { if (!cancelled) { setMktStatus(d); setMktLoading(false); } })
+      .catch(() => { if (!cancelled) { setMktStatus(null); setMktLoading(false); } });
+    return () => { cancelled = true; };
+  }, [currentWorkspace?.id]);
+
   if (!currentWorkspace || currentUser?.role === "staff") return null;
 
   return (
@@ -67,7 +81,58 @@ export const ClientN8n: React.FC = () => {
         {!loading && agents.length === 0 && <div className="md:col-span-2 xl:col-span-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{isAr ? "لا توجد بيانات Agents مسجلة بعد." : "No agent registry data is available yet."}</div>}
       </div>
 
-      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+      
+      {/* Marketing FOX — Real Automation Center Status (no fake data) */}
+      <div className="rounded-3xl border border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-slate-50 dark:from-slate-900 dark:to-slate-950 p-5 shadow-sm space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-amber-500/10 flex items-center justify-center"><Activity className="h-5 w-5 text-amber-600" /></div>
+          <div>
+            <h3 className="font-black text-slate-900 dark:text-white">{isAr ? "نشاط التسويق الآلي — بيانات حقيقية" : "Marketing FOX Automation — Real Data Only"}</h3>
+            <p className="text-[11px] text-slate-500 font-medium">{isAr ? "من /api/marketing/status — لا بيانات وهمية." : "From /api/marketing/status — no simulated metrics."}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            { labelAr: "وضع الموافقة", labelEn: "Approval", val: mktLoading ? (isAr?"...":"...") : (mktStatus?.approvalMode === 'AUTO_PUBLISH' ? (isAr?"نشر تلقائي":"Auto-Publish") : mktStatus?.approvalMode==='MANUAL_APPROVAL'?(isAr?"موافقة يدوية":"Manual Approval"):(isAr?"غير مهيأ":"Not configured")) },
+            { labelAr: "استراتيجية", labelEn: "Strategy", val: mktLoading ? (isAr?"...":"...") : (mktStatus?.strategySet ? (isAr?"مُعدّة":"Configured") : (isAr?"غير موجودة":"Missing")) },
+            { labelAr: "فيسبوك/إنستغرام", labelEn: "FB / IG", val: mktLoading ? (isAr?"...":"...") : ((mktStatus?.platforms?.facebook?.connected?(isAr?"متصل":"Connected"):(isAr?"غير متصل":"Not connected")) + "/" + (mktStatus?.platforms?.instagram?.connected?(isAr?"متصل":"Connected"):(isAr?"غير متصل":"Not connected"))) },
+            { labelAr: "منشورات منشورة", labelEn: "Published", val: mktLoading ? (isAr?"...":"...") : String(mktStatus?.recentPosts?.published ?? 0) },
+            { labelAr: "منشورات فاشلة", labelEn: "Failed", val: mktLoading ? (isAr?"...":"...") : String(mktStatus?.recentPosts?.failed ?? 0) },
+            { labelAr: "n8n (مؤجل)", labelEn: "n8n (deferred)", val: isAr ? "07-marketing-scheduled-post — مؤجل" : "07-marketing-scheduled-post — deferred" },
+          ].map((s,i) => (
+            <div key={i} className="rounded-xl bg-white/70 dark:bg-slate-900/70 border border-amber-100 dark:border-amber-900 px-3 py-2.5">
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{isAr ? s.labelAr : s.labelEn}</div>
+              <div className="text-sm font-black text-amber-700 dark:text-amber-300 truncate">{s.val}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          <span>{isAr ? "n8n 2.35.0 REST — التنفيذ مؤجل حتى التحقق الخارجي. لا بيانات وهمية في هذه الشاشة." : "n8n 2.35.0 REST — execution deferred until external verification. No fake data shown here."}</span>
+        </div>
+      </div>
+
+
+      {/* Real integration status — channel connections visible to workspace owner, no fake metrics */}
+      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3">
+        <div className="flex items-center gap-3"><div className="h-10 w-10 rounded-2xl bg-blue-500/10 flex items-center justify-center"><Bot className="h-5 w-5 text-blue-500" /></div><div><h3 className="font-black text-slate-900 dark:text-white">{isAr ? "تكامل القنوات — حالة حقيقية" : "Channel Integrations — Real Status"}</h3><p className="text-[11px] text-slate-500 font-medium">{isAr ? "حالة WhatsApp / Messenger / Telegram / Instagram من إعدادات المنشأة. لا بيانات وهمية." : "WhatsApp / Messenger / Telegram / Instagram state from workspace settings. No simulated data."}</p></div></div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { labelAr: "واتساب", labelEn: "WhatsApp", connected: !!(currentWorkspace?.whatsappPhoneNumberId && currentWorkspace?.whatsappPhoneNumberId.toString().trim()), noteAr: "إرسال متابعة حقيقي", noteEn: "Real follow-up delivery" },
+            { labelAr: "Messenger", labelEn: "Messenger", connected: !!(!!currentWorkspace?.metaPageId), noteAr: "متابعة عبر Messenger", noteEn: "Messenger follow-up" },
+            { labelAr: "Telegram", labelEn: "Telegram", connected: (currentWorkspace?.telegramBotStatus === "connected"), noteAr: "بوت المنครง", noteEn: "Bot connected" },
+            { labelAr: "Instagram", labelEn: "Instagram", connected: !!(currentWorkspace?.instagramBotStatus === "connected"), noteAr: "رسائل DM حقيقية", noteEn: "Real DM delivery" },
+          ].map((ch,i) => (
+            <div key={i} className="rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 px-3 py-3">
+              <div className="flex items-center justify-between mb-1"><span className="text-xs font-black text-slate-700 dark:text-slate-200">{isAr ? ch.labelAr : ch.labelEn}</span><span className={`h-2 w-2 rounded-full ${ch.connected ? "bg-emerald-500" : "bg-amber-400"}`} /></div>
+              <div className="text-sm font-black text-amber-700 dark:text-amber-300">{ch.connected ? (isAr ? "متصل — تسليم حقيقي" : "Connected — real delivery") : (isAr ? "غير متصل" : "Not connected")}</div>
+              <div className="text-[10px] text-slate-400 mt-1">{isAr ? ch.noteAr : ch.noteEn}</div>
+            </div>
+          ))}
+        </div>
+        <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-300"><ShieldCheck className="h-3.5 w-3.5 inline mr-1" />{isAr ? "لا يوجد نشر أو مقياس وهمي. إذا كانت القناة غير متصلة، لا يتم إرسال أي رسالة متابعة." : "No fake posts or metrics. If a channel is not connected, no follow-up message is sent."}</div>
+      </div>
+<div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
         <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3"><Activity className="h-5 w-5 text-violet-500" /><div><h3 className="font-black text-slate-900 dark:text-white">{isAr ? "آخر نشاط للوكلاء" : "Recent Agent Activity"}</h3><p className="text-xs text-slate-500">{isAr ? "الأحداث الخاصة بمنشأتك فقط" : "Only activity associated with this workspace"}</p></div></div>
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
           {activities.map((item) => <div key={item.id} className="p-4 flex items-start gap-3"><Clock3 className="h-4 w-4 text-slate-400 mt-0.5" /><div className="min-w-0"><p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{item.message}</p><p className="text-[10px] text-slate-400 mt-1">{new Date(item.createdAt).toLocaleString(isAr ? "ar-EG" : "en-US")}</p></div></div>)}
