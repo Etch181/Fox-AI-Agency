@@ -32,6 +32,7 @@ import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { aiAgentService } from "./src/services/aiAgentService";
+import { ensureWorkspaceAgentRoutingDefaults, getWorkspaceAgentRouting, routeWorkspaceAgent, setWorkspaceAgentRouting } from "./src/services/workspaceAgentService";
 import { sharedMemoryService } from "./src/services/sharedMemoryService";
 import { conversationService } from "./src/services/conversationService";
 import { workspaceCrmService } from "./src/services/workspaceCrmService";
@@ -8814,6 +8815,33 @@ app.post(
 
 
 
+// ============================================================
+// Workspace Agent Assignment — tenant-scoped control plane
+// ============================================================
+app.get(
+  "/api/agents/routing",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("workspace agent routing read", async (req: any, res: any) => {
+    const workspaceId = String(req.query?.workspaceId || "").trim();
+    const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!trusted) return;
+    const routing = await getWorkspaceAgentRouting(workspaceId, trusted.industry);
+    return res.json({ success: true, workspaceId, industry: trusted.industry, routing });
+  }),
+);
+
+app.put(
+  "/api/agents/routing",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("workspace agent routing update", async (req: any, res: any) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!trusted) return;
+    const routing = await setWorkspaceAgentRouting(workspaceId, req.body?.routing || {}, trusted.industry);
+    return res.json({ success: true, workspaceId, routing });
+  }),
+);
+
 // n8n Specialized Agent Dispatch
 // n8n is the orchestration layer; FOX remains the tenant/security/AI boundary.
 app.post(
@@ -8845,7 +8873,7 @@ app.post(
     const body = req.body || {};
     const workspaceId = String(body.workspaceId || "").trim();
     const message = String(body.message || body.customerMessage || "").trim();
-    const agent = String(body.agent || "support").trim().toLowerCase();
+    const requestedAgent = String(body.agent || "").trim().toLowerCase();
     const channel = String(body.channel || "n8n").trim().toLowerCase();
     const sessionId = String(body.sessionId || `n8n:${workspaceId}:${Date.now()}`).trim();
 
@@ -8874,11 +8902,19 @@ app.post(
       restaurant: "You are the FOX Restaurant Agent. Handle menu questions, table/reservation requests and order intent using only the tenant menu and configured policies. Never invent availability or prices.",
       course_center: "You are the FOX Course Center Agent. Handle course discovery, enrollment questions, schedules, pricing and lead capture using only tenant course data. Never invent seats, dates or fees.",
       marketing: "You are the FOX Marketing Agent. Produce strategy, content briefs, channel-specific copy, campaign tasks and optimization recommendations from tenant context. Do not claim a post was published or metrics were achieved unless a real integration result is supplied.",
+      sales: "You are the FOX Sales Agent. Qualify the customer, recommend only tenant-approved products or services, capture buying intent, and hand off payment or fulfillment steps without inventing availability, price, or policy.",
+      "customer-support": "You are the FOX Customer Support Agent. Resolve customer questions using tenant knowledge and escalate when confidence or authority is insufficient.",
+      knowledge: "You are the FOX Knowledge Agent. Answer only from tenant-approved knowledge and business data. If the answer is not grounded, escalate instead of guessing.",
       support: "You are the FOX Customer Support Agent. Resolve customer questions using tenant knowledge and escalate when confidence or authority is insufficient.",
     };
 
+    const routing = await getWorkspaceAgentRouting(workspaceId, trustedWorkspace.industry);
+    const routed = requestedAgent && routing.enabledAgents.includes(requestedAgent as any)
+      ? { agent: requestedAgent as any, reason: "workflow_agent" }
+      : routeWorkspaceAgent(message, routing);
+    const agent = String(routed.agent).toLowerCase();
     const selectedPrompt = agentPrompts[agent] || agentPrompts.support;
-    const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support" };
+    const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support", sales: "sales", "customer-support": "customer-support", knowledge: "knowledge", "clinic-appointments": "clinic-appointments", "complaints-suggestions": "complaints-suggestions", "pharmacy-sales": "pharmacy-sales", "retail-sales": "retail-sales", "restaurant-operations": "restaurant-operations", "course-center": "course-center" };
     const controlPlane = await import("./src/services/foxAgentControlPlane");
     const registeredAgent = await controlPlane.getAgentByRole(roleMap[agent] || "custom");
     if (registeredAgent) {
@@ -8934,6 +8970,9 @@ app.post(
         source: result.source,
         detectedLanguage: result.detectedLanguage,
         suggestedActions: result.suggestedActions || [],
+        handoffRequired: Boolean(result.handoffRequired),
+        handoffReason: result.handoffReason,
+        routing: { selectedAgent: agent, reason: routed.reason, enabledAgents: routing.enabledAgents },
       });
     } catch (error: any) {
       console.error("[FOX n8n Agent Dispatch Error]", error?.message || error);
@@ -9259,7 +9298,7 @@ app.get(
     const trustedWorkspace = requireAuthenticatedWorkspace(req, res, requestedWorkspaceId);
     if (!trustedWorkspace) return;
 
-    const role = String(req.user?.role || "");
+    const role = String(req.foxAuth?.role || "");
     if (role !== "super_admin" && role !== "client_owner") {
       return res.status(403).json({ error: "Agent activity is available to workspace owners only" });
     }
@@ -9304,7 +9343,7 @@ app.get(
   "/api/marketing/status",
   authenticateFirebaseRequest,
   secureAsyncRoute("marketing automation status", async (req, res) => {
-    const { workspaceId } = (req as any).user || {};
+    const workspaceId = String((req as any).foxAuth?.workspaceId || "").trim();
     if (!workspaceId) {
       return res.status(401).json({ error: "unauthenticated" });
     }
@@ -9554,6 +9593,15 @@ async function startServer() {
   // Persistent tenant startup
   // --------------------------------------------------------
   await hydrateRegisteredWorkspacesFromFirestore();
+
+  // Create tenant-scoped Agent assignments once for legacy workspaces.
+  // Existing explicit routing is never overwritten.
+  try {
+    const initializedAgentRouting = await ensureWorkspaceAgentRoutingDefaults();
+    console.log(`🤖 [FOX Agent Routing] Initialized defaults for ${initializedAgentRouting} workspace(s)`);
+  } catch (agentRoutingError: any) {
+    console.warn("⚠️ [FOX Agent Routing] Default initialization skipped:", agentRoutingError?.message || agentRoutingError);
+  }
 
   // Configure tenant Telegram webhooks only AFTER
   // Firestore tenants and encrypted tokens are hydrated.
