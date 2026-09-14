@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-foxaiagency-04fd26ac-2d0b-4a82-a57f-eb993ed62f2f",
+      "rules": "firestore.rules"
+    }
+  ]
+}
