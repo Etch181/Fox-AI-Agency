@@ -430,7 +430,7 @@ required_environment = {
     "ENABLE_AGENCY_TELEGRAM_POLLING": "false",
     "ENABLE_META": "true",
     "ENABLE_SMTP": "false",
-    "ENABLE_N8N": "false",
+    "ENABLE_N8N": "true",
     "ENABLE_EXTERNAL_CRM": "false",
 }
 for key, expected in required_environment.items():
