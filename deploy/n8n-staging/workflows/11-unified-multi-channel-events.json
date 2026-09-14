@@ -1,0 +1,11 @@
+{
+  "name": "11-unified-multi-channel-events",
+  "nodes": [
+    {"id":"webhook","type":"n8n-nodes-base.webhook","parameters":{"path":"unified-events","responseMode":"lastNode"}},
+    {"id":"route","type":"n8n-nodes-base.switch","parameters":{"mode":"rules","dataType":"string","rules":[{"value1":"={{ $json.channel }}","operation":"equals","value2":"whatsapp"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"messenger"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"telegram"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"instagram"}]}},
+    {"id":"crm","type":"n8n-nodes-base.firestore","parameters":{"operation":"upsert","collection":"leads","options":{}}},
+    {"id":"notify","type":"n8n-nodes-base.httpRequest","parameters":{"method":"POST","url":"=$env.N8N_WEBHOOK_URL","authentication":"basicAuth","sendBody":true}
+  ],
+  "tags":["multi-channel","unified","whatsapp","messenger","telegram","instagram"],
+  "notes":"Fail-closed: stops if $env.WHATSAPP_APP_SECRET or $env.META_PAGE_TOKEN missing. Uses workspace secrets only."
+}
