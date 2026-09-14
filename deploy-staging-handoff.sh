@@ -272,9 +272,9 @@ workflows = sorted(
     (source / "deploy/n8n-staging/workflows").glob("*.json")
 )
 
-if len(workflows) != 10:
+if len(workflows) != 11:
     raise SystemExit(
-        f"Expected 10 n8n workflows, found {len(workflows)}"
+        f"Expected 11 n8n workflows, found {len(workflows)}"
     )
 
 values = {}
