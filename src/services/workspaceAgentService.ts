@@ -12,11 +12,11 @@ const DEFAULT_ROUTING: WorkspaceAgentRouting = {
 };
 
 const INDUSTRY_DEFAULTS: Record<string, WorkspaceAgentId[]> = {
-  Clinic: ["clinic-appointments", "customer-support", "complaints-suggestions", "sales"],
-  Pharmacy: ["pharmacy-sales", "customer-support", "complaints-suggestions", "sales"],
-  Restaurant: ["restaurant-operations", "sales", "customer-support", "complaints-suggestions"],
-  Retail: ["retail-sales", "sales", "customer-support", "complaints-suggestions"],
-  "Course Center": ["course-center", "sales", "customer-support", "complaints-suggestions"],
+  Clinic: ["clinic-appointments", "customer-support", "complaints-suggestions", "sales", "marketing"],
+  Pharmacy: ["pharmacy-sales", "customer-support", "complaints-suggestions", "sales", "marketing"],
+  Restaurant: ["restaurant-operations", "sales", "customer-support", "complaints-suggestions", "marketing"],
+  Retail: ["retail-sales", "sales", "customer-support", "complaints-suggestions", "marketing"],
+  "Course Center": ["course-center", "sales", "customer-support", "complaints-suggestions", "marketing"],
   "Small Business": ["sales", "customer-support", "complaints-suggestions", "marketing"],
 };
 
@@ -82,6 +82,24 @@ const INTENT_TERMS: Record<WorkspaceAgentId, string[]> = {
 export function routeWorkspaceAgent(message: string, routing: WorkspaceAgentRouting): { agent: WorkspaceAgentId; reason: string } {
   const enabled = routing.enabledAgents;
   if (!enabled.length) return { agent: routing.primaryAgent, reason: "primary_agent" };
+
+  // Hard operational intents always beat generic keyword routing.
+  // This prevents phrases such as “cancel my booking” from being
+  // misclassified as a new booking merely because they contain “booking”.
+  const text = String(message || "").trim().toLowerCase();
+  if (/(إلغاء\s*(?:الحجز|الموعد)?|الغاء\s*(?:الحجز|الموعد)?|ألغي\s*(?:الحجز|الموعد)?|الغى\s*(?:الحجز|الموعد)?|cancel\s*(?:my\s*)?(?:booking|appointment))/i.test(text)) {
+    const target = enabled.includes("clinic-appointments") ? "clinic-appointments" : enabled.includes("customer-support") ? "customer-support" : routing.primaryAgent;
+    return { agent: target, reason: "brain_cancel_booking" };
+  }
+  if (/(تغيير.*(?:الحجز|الموعد)|تعديل.*(?:الحجز|الموعد)|reschedul)/i.test(text)) {
+    const target = enabled.includes("clinic-appointments") ? "clinic-appointments" : routing.primaryAgent;
+    return { agent: target, reason: "brain_reschedule_booking" };
+  }
+  if (/(شكوى|complaint|تقديم.*شكوى|أقدم شكوى|اقدم شكوى)/i.test(text)) {
+    const target = enabled.includes("complaints-suggestions") ? "complaints-suggestions" : enabled.includes("customer-support") ? "customer-support" : routing.primaryAgent;
+    return { agent: target, reason: "brain_complaint" };
+  }
+
   const scored = enabled.map((agent) => ({ agent, score: (routing.agentPriorities[agent] || 0) + (containsAny(message, INTENT_TERMS[agent] || []) ? 1000 : 0) }));
   scored.sort((a, b) => b.score - a.score);
   const winner = scored[0]?.agent || routing.primaryAgent;
@@ -96,7 +114,15 @@ export async function ensureWorkspaceAgentRoutingDefaults(): Promise<number> {
   let pending = 0;
   for (const doc of snapshot.docs) {
     const data = doc.data() || {};
-    if (data.agentRouting && Array.isArray(data.agentRouting.enabledAgents) && data.agentRouting.enabledAgents.length) continue;
+    if (data.agentRouting && Array.isArray(data.agentRouting.enabledAgents) && data.agentRouting.enabledAgents.length) {
+      if (!data.agentRouting.enabledAgents.includes("marketing")) {
+        const enabledAgents = [...data.agentRouting.enabledAgents, "marketing" as WorkspaceAgentId];
+        const priorities = { ...(data.agentRouting.agentPriorities || {}), marketing: data.agentRouting.agentPriorities?.marketing || 50 };
+        batch.set(doc.ref, { agentRouting: { ...data.agentRouting, enabledAgents, agentPriorities: priorities, updatedAt: new Date().toISOString() }, updatedAt: new Date().toISOString() }, { merge: true });
+        created++; pending++;
+      }
+      continue;
+    }
     batch.set(doc.ref, { agentRouting: defaultWorkspaceAgentRouting(data.industry), updatedAt: new Date().toISOString() }, { merge: true });
     created++; pending++;
     if (pending >= 400) { await batch.commit(); batch = adminDb.batch(); pending = 0; }

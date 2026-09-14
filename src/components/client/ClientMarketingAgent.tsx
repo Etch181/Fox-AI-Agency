@@ -3,6 +3,7 @@ import { useTranslation } from "../../services/LanguageService";
 import { useApp } from "../../context/AppContext";
 import { collection, query, where, getDocs, addDoc, deleteDoc, doc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../services/firebase";
+import { authenticatedFetch } from "../../services/authenticatedFetch";
 import {
   Sparkles,
   Share2,
@@ -91,7 +92,7 @@ export const ClientMarketingAgent: React.FC = () => {
     if (!currentWorkspace?.id) return;
     let cancelled = false;
     setMktStatusLoading(true);
-    fetch("/api/marketing/status", { headers: { "Content-Type": "application/json" } })
+    authenticatedFetch("/api/marketing/status", { headers: { "Content-Type": "application/json" } })
       .then((r) => r.json().catch(() => null))
       .then((data: any) => {
         if (cancelled) return;
@@ -153,10 +154,11 @@ export const ClientMarketingAgent: React.FC = () => {
     setCopied(false);
 
     try {
-      const response = await fetch("/api/generate-ai-post", {
+      const response = await authenticatedFetch("/api/generate-ai-post", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          workspaceId: currentWorkspace?.id,
           topic,
           platform: selectedPlatform,
           targetAudience,
@@ -187,17 +189,8 @@ export const ClientMarketingAgent: React.FC = () => {
 
         setCurrentResult(newResult);
 
-        // Save to Firestore
-        try {
-          const docRef = await addDoc(collection(db, "marketing_generated_posts"), {
-            ...newResult,
-            createdAt: serverTimestamp()
-          });
-          setSavedPosts((prev) => [{ ...newResult, id: docRef.id }, ...prev]);
-        } catch (e) {
-          console.error("Error saving generated post to Firestore:", e);
-          setSavedPosts((prev) => [{ ...newResult, id: "local_" + Date.now() }, ...prev]);
-        }
+        // The server is the source of truth and already persisted the generated post.
+        setSavedPosts((prev) => [{ ...newResult, id: data.id }, ...prev]);
       }
     } catch (err: any) {
       console.error("Error generating AI post:", err);

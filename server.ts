@@ -33,12 +33,15 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { aiAgentService } from "./src/services/aiAgentService";
 import { ensureWorkspaceAgentRoutingDefaults, getWorkspaceAgentRouting, routeWorkspaceAgent, setWorkspaceAgentRouting } from "./src/services/workspaceAgentService";
-import { indexWorkspaceKnowledge, searchKnowledge, formatKnowledgeResults } from "./src/services/qdrantKnowledgeService";
+import { indexWorkspaceKnowledge, searchKnowledge, formatKnowledgeResults, deleteKnowledgeFact } from "./src/services/qdrantKnowledgeService";
+import { getAgentAnalytics } from "./src/services/agentAnalyticsService";
+
 import { sharedMemoryService } from "./src/services/sharedMemoryService";
 import { conversationService } from "./src/services/conversationService";
 import { workspaceCrmService } from "./src/services/workspaceCrmService";
 import { workspaceDataService } from "./src/services/workspaceDataService";
 import { crmEventService } from "./src/services/crmEventService";
+import { claimDueReminders, claimReminder, deliverReminder } from "./src/services/appointmentReminderService";
 import { validateExternalCrmWebhookUrl } from "./src/services/crmService";
 import { calculateEntitlementRenewal } from "./src/utils/entitlementRenewal";
 import { secureAsyncRoute } from "./src/utils/secureAsyncRoute";
@@ -66,7 +69,8 @@ import { TrialLimitManager } from "./src/services/TrialLimitManager";
 import { metaStagingFatalDecision } from "./src/utils/bootDecision";
 import { printEnvValidation } from "./src/utils/envValidation";
 import { instagramIntegrationRouter } from "./src/services/instagramIntegrationRouter";
-import { getMarketingAutomationStatus } from "./src/services/marketingEngineService";
+import { getMarketingAutomationStatus, getOrCreateStrategy, setStrategy, createCalendarEntry, buildMediaPlan, createMediaJob, getMediaJob } from "./src/services/marketingEngineService";
+import { createSocialPublishRecord, transitionRecordState, processScheduledPost, runDueMarketingPublishing } from "./src/services/socialPublishingService";
 import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
 import {
   normalizeRegistrationEmail,
@@ -258,6 +262,7 @@ app.use(express.json({
 
 // Store generated OTP codes in memory for web/API verification
 const otpStore: Record<string, { code: string; expiresAt: number; ownerName?: string; workspaceName?: string }> = {};
+const otpVerificationTokens: Record<string, { email: string; expiresAt: number }> = {};
 
 // Send Email OTP Endpoint
 app.post("/api/send-otp", async (req, res) => {
@@ -268,11 +273,12 @@ app.post("/api/send-otp", async (req, res) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpCode = randomBytes(4).readUInt32BE(0) % 1000000;
+    const otpCodeText = String(otpCode).padStart(6, "0");
 
     // Store in memory (15 min expiration)
     otpStore[cleanEmail] = {
-      code: otpCode,
+      code: otpCodeText,
       expiresAt: Date.now() + 15 * 60 * 1000,
       ownerName,
       workspaceName,
@@ -281,7 +287,7 @@ app.post("/api/send-otp", async (req, res) => {
     const mailResult = await emailService.sendVerificationEmail({
       toEmail: cleanEmail,
       ownerName,
-      otpCode,
+      otpCode: otpCodeText,
       workspaceName,
     });
 
@@ -323,7 +329,12 @@ app.post("/api/verify-otp", (req, res) => {
 
     if (record.code === otpCode.trim()) {
       delete otpStore[cleanEmail];
-      return res.json({ success: true, verified: true, message: "تم تفعيل وتأكيد البريد الإلكتروني بنجاح!" });
+      const verificationToken = randomBytes(32).toString("hex");
+      otpVerificationTokens[verificationToken] = {
+        email: cleanEmail,
+        expiresAt: Date.now() + 15 * 60 * 1000,
+      };
+      return res.json({ success: true, verified: true, verificationToken, message: "تم تفعيل وتأكيد البريد الإلكتروني بنجاح!" });
     } else {
       return res.status(400).json({ error: "رمز التفعيل غير صحيح. برجاء التأكد من الرمز وإعادة المحاولة." });
     }
@@ -354,73 +365,124 @@ function getGeminiClient() {
 // ==========================================
 
 // AI Social Media Post Generator & Optimal Timing Endpoint
-app.post("/api/generate-ai-post", async (req, res) => {
+app.post("/api/generate-ai-post", authenticateFirebaseRequest, secureAsyncRoute("marketing AI generation", async (req: any, res) => {
   try {
-    const {
-      topic = "",
-      platform = "facebook",
-      targetAudience = "أصحاب المحلات والمشاريع",
-      tone = "إقناعي وحماسي",
-      language = "ar"
-    } = req.body;
+    const workspaceId = String(req.foxAuth?.workspaceId || req.body?.workspaceId || "").trim();
+    const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+    if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
 
-    const isAr = language === "ar";
-    const userTopic = topic.trim() || (isAr ? "حلول الذكاء الاصطناعي لتنمية المبيعات وخدمة العملاء 24/7" : "AI Automation Solutions for Business Growth");
+    const access = requireWorkspaceFeature(trusted, "marketing_engine");
+    if (!access.allowed) return res.status(access.status).json(access);
 
-    const gemini = getGeminiClient();
-    if (gemini) {
-      try {
-        const prompt = `أنت خبير تسويق رقمي وكتابة محتوى لمواقع التواصل الاجتماعي (Social Media Copywriter).
-المطلوب: كتابة منشور تسويقي جذاب واحترافي لمنصة (${platform}) باللغة (${isAr ? "العربية" : "الإنكليزية"}).
+    const topic = String(req.body?.topic || "").trim() || "تنمية المبيعات وخدمة العملاء";
+    const platform = String(req.body?.platform || "facebook").trim().toLowerCase();
+    const targetAudience = String(req.body?.targetAudience || "عملاء المنشأة").trim();
+    const tone = String(req.body?.tone || "احترافي وإقناعي").trim();
+    const language = String(req.body?.language || "ar").toLowerCase() === "en" ? "en" : "ar";
+    const strategy = await getOrCreateStrategy(trusted.id, { industryType: trusted.industry });
 
-تفاصيل المنشور:
-- الموضوع/العرض: ${userTopic}
-- المنصة: ${platform}
-- الجمهور المستهدف: ${targetAudience}
-- نبرة الكتابة: ${tone}
+    const prompt = language === "ar"
+      ? `أنت FOX Marketing Agent للمنشأة التالية.\nاسم المنشأة: ${trusted.name}\nنوع النشاط: ${trusted.industry}\nوصف النشاط: ${trusted.businessDescription || "غير متوفر"}\nهدف النشاط: ${strategy.businessGoal || "زيادة العملاء والمبيعات"}\nالجمهور: ${targetAudience}\nالمنصة: ${platform}\nالنبرة: ${tone}\nموضوع الحملة: ${topic}\n\nأنشئ منشوراً مناسباً لهذه المنشأة والمنصة، وليس نصاً عاماً. لا تخترع أسعاراً أو عروضاً أو بيانات غير موجودة. أعد JSON فقط بالمفاتيح: postContent, recommendedTime, bestDays, reason, suggestedVisualPrompt. postContent يجب أن يكون جاهزاً للنشر.`
+      : `You are FOX Marketing Agent for this tenant. Business: ${trusted.name}; industry: ${trusted.industry}; description: ${trusted.businessDescription || "not provided"}; audience: ${targetAudience}; platform: ${platform}; tone: ${tone}; topic: ${topic}. Create platform-specific publish-ready content. Never invent prices, offers, facts, or metrics. Return JSON only with keys postContent, recommendedTime, bestDays, reason, suggestedVisualPrompt.`;
 
-المنشور يجب أن يحتوي على:
-1. عنوان حماسي يشد الانتباه في السطر الأول مع إيموجي مميز.
-2. جسم المنشور يوضح المزايا والقيمة التنافسية في نقاط منظمة.
-3. دعوة واضحة اتخاذ إجراء (Call To Action) تشجع القارئ على التعليق أو المراسلة.
-4. قائمة بالهاشتاجات النشطة والمناسبة لـ ${platform}.
-
-أعد النتيجة فقط ككائن JSON بالصيغة التالية من غير أي markdown أو شروح حولها:
-{
-  "postContent": "نص المنشور الكامل هنا",
-  "recommendedTime": "الوقت المقترح (مثال: اليوم الساعة 8:00 مساءً)",
-  "bestDays": "أفضل الأيام (مثال: الأحد، الثلاثاء، الخميس)",
-  "reason": "سبب اختيار هذا الوقت للجمهور المستهدف",
-  "suggestedVisualPrompt": "وصف الصورة المقترحة للمنشور"
-}`;
-
-        const response = await gemini.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: prompt,
-          config: { responseMimeType: "application/json" }
-        });
-
-        const textResult = response.text;
-        if (textResult) {
-          const parsed = JSON.parse(textResult);
-          return res.json({ success: true, ...parsed });
-        }
-      } catch (geminiError) {
-        console.warn("[Gemini API Error in /api/generate-ai-post, falling back]:", geminiError);
-      }
-    }
-
-    return res.status(503).json({
-      success: false,
-      code: "AI_PROVIDER_UNAVAILABLE",
-      error: isAr
-        ? "مولد المحتوى التسويقي غير متاح حالياً: لم يتم تهيئة مزود ذكاء اصطناعي حقيقي على بيئة التشغيل."
-        : "Marketing content generation is unavailable: no real AI provider is configured in this environment.",
+    const result = await aiAgentService.generateChatResponse({
+      workspace: await withWorkspaceRuntimeIntegrations(trusted),
+      message: prompt,
+      channel: "marketing",
+      sessionId: `marketing:${trusted.id}:${Date.now()}`,
+      chatHistory: [],
+      overrideConfig: { customPrompt: language === "ar" ? "أنت FOX Marketing Agent. أخرج JSON صالح فقط ولا تضف markdown." : "You are FOX Marketing Agent. Output valid JSON only, no markdown." },
     });
+
+    const raw = String(result?.response || result?.aiResponse || "").trim();
+    const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonText) return res.status(503).json({ success: false, code: "MARKETING_GENERATION_INVALID" });
+    const parsed = JSON.parse(jsonText);
+    const postContent = String(parsed.postContent || "").trim();
+    if (!postContent) return res.status(503).json({ success: false, code: "MARKETING_CONTENT_EMPTY" });
+    const mediaType = (["text", "image", "video"] as const).includes(String(req.body?.mediaType || "text") as any)
+      ? String(req.body?.mediaType || "text") as "text" | "image" | "video"
+      : "text";
+    const mediaPlan = mediaType === "text"
+      ? buildMediaPlan("text", topic, trusted.name, postContent)
+      : buildMediaPlan(mediaType, topic, trusted.name, postContent);
+
+    const generated = {
+      workspaceId: trusted.id,
+      platform,
+      topic,
+      content: postContent,
+      recommendedTime: String(parsed.recommendedTime || ""),
+      bestDays: String(parsed.bestDays || ""),
+      reason: String(parsed.reason || ""),
+      suggestedVisualPrompt: String(parsed.suggestedVisualPrompt || ""),
+      targetAudience,
+      mediaType,
+      mediaPlan,
+      createdAt: new Date().toISOString(),
+      aiSource: result?.source || "openrouter",
+    };
+    const generatedRef = adminDb.collection("marketing_generated_posts").doc();
+    await generatedRef.set(generated);
+    const mediaJobId = mediaType === "text" ? undefined : await createMediaJob(trusted.id, mediaPlan, generatedRef.id);
+
+    return res.json({ success: true, id: generatedRef.id, mediaJobId, ...generated });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error("[FOX Marketing AI] generation failed:", err?.message || err);
+    return res.status(503).json({ success: false, code: "MARKETING_AI_UNAVAILABLE", error: "Marketing AI generation failed safely" });
   }
-});
+}));
+
+app.get("/api/marketing/media/:jobId", authenticateFirebaseRequest, secureAsyncRoute("marketing media job", async (req: any, res) => {
+  const workspaceId = String(req.foxAuth?.workspaceId || "").trim();
+  const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+  if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+  const access = requireWorkspaceFeature(trusted, "marketing_engine");
+  if (!access.allowed) return res.status(access.status).json(access);
+  const job = await getMediaJob(trusted.id, String(req.params.jobId || "").trim());
+  if (!job) return res.status(404).json({ success: false, code: "MARKETING_MEDIA_JOB_NOT_FOUND" });
+  return res.json({ success: true, job });
+}));
+
+app.post("/api/marketing/strategy", authenticateFirebaseRequest, secureAsyncRoute("marketing strategy", async (req: any, res) => {
+  const workspaceId = String(req.foxAuth?.workspaceId || req.body?.workspaceId || "").trim();
+  const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+  if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+  const access = requireWorkspaceFeature(trusted, "marketing_engine");
+  if (!access.allowed) return res.status(access.status).json(access);
+  const strategy = req.body?.strategy || {};
+  await setStrategy(trusted.id, strategy);
+  return res.json({ success: true, strategy: await getOrCreateStrategy(trusted.id) });
+}));
+
+app.post("/api/marketing/publish/:recordId", authenticateFirebaseRequest, secureAsyncRoute("marketing manual publish", async (req: any, res) => {
+  const workspaceId = String(req.foxAuth?.workspaceId || "").trim();
+  const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+  if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+  const access = requireWorkspaceFeature(trusted, "marketing_engine");
+  if (!access.allowed) return res.status(access.status).json(access);
+  const recordId = String(req.params.recordId || "").trim();
+  const record = await (await import("./src/services/socialPublishingService")).getSocialPublishRecord(trusted.id, recordId);
+  if (!record) return res.status(404).json({ success: false, code: "MARKETING_RECORD_NOT_FOUND" });
+  await transitionRecordState(trusted.id, recordId, "scheduled", { mode: "AUTO_PUBLISH", approvedBy: String(req.foxAuth?.uid || "owner") });
+  const result = await processScheduledPost(trusted.id, recordId);
+  return res.status(result.success ? 200 : 502).json(result);
+}));
+
+app.post("/api/marketing/schedule", authenticateFirebaseRequest, secureAsyncRoute("marketing schedule", async (req: any, res) => {
+  const workspaceId = String(req.foxAuth?.workspaceId || req.body?.workspaceId || "").trim();
+  const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+  if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+  const access = requireWorkspaceFeature(trusted, "marketing_engine");
+  if (!access.allowed) return res.status(access.status).json(access);
+  const content = String(req.body?.content || "").trim();
+  const platform = String(req.body?.platform || "facebook").trim().toLowerCase();
+  const scheduleAt = String(req.body?.scheduleAt || "").trim();
+  if (!content || !["facebook", "instagram"].includes(platform) || !scheduleAt) return res.status(400).json({ success: false, code: "MARKETING_SCHEDULE_INPUT_INVALID" });
+  const calendarId = await createCalendarEntry(trusted.id, { day: scheduleAt.slice(0,10), platform: platform as any, topic: String(req.body?.topic || ""), generatedContent: content, scheduledTime: scheduleAt, status: "scheduled" });
+  const recordId = await createSocialPublishRecord(trusted.id, { platform: platform as any, content, imageUrl: String(req.body?.imageUrl || "").trim() || undefined, scheduledAt: scheduleAt, state: "scheduled", mode: String(req.body?.mode || "MANUAL_APPROVAL") === "AUTO_PUBLISH" ? "AUTO_PUBLISH" : "MANUAL_APPROVAL" });
+  return res.json({ success: true, calendarId, recordId, state: "scheduled" });
+}));
 
 // FOX CRM AI Lead Intelligence
 app.post(
@@ -697,6 +759,49 @@ app.post(
   })
 );
 
+// n8n Appointment Reminder Runner — claims and delivers due tenant reminders.
+app.post(
+  "/api/internal/automation/appointment-reminders/run",
+  secureAsyncRoute("appointment reminder automation", async (req, res) => {
+    const expectedToken = String(process.env.FOX_AUTOMATION_TOKEN || "").trim();
+    const suppliedToken = String(req.headers["x-fox-automation-token"] || "").trim();
+    const requestHost = String(req.headers.host || "").trim().toLowerCase();
+    const remoteAddress = String(req.socket?.remoteAddress || "").trim();
+    const privatePeer = /^(::ffff:)?10\.|^(::ffff:)?192\.168\.|^(::ffff:)?172\.(1[6-9]|2[0-9]|3[0-1])\./.test(remoteAddress);
+    const internalN8nPeer = requestHost === "fox-ai-staging:3000" && privatePeer;
+    if (!(expectedToken && suppliedToken && suppliedToken === expectedToken) && !internalN8nPeer) {
+      return res.status(401).json({ success: false, error: "Automation authentication failed" });
+    }
+
+    const workspaces = await adminDb.collection("workspaces").get();
+    let scanned = 0, claimed = 0, sent = 0, failed = 0;
+    for (const workspaceDoc of workspaces.docs) {
+      const workspaceId = workspaceDoc.id;
+      const due = await claimDueReminders(workspaceId);
+      scanned += due.length;
+      for (const reminder of due.slice(0, 100)) {
+        if (!reminder.id) continue;
+        const didClaim = await claimReminder(workspaceId, reminder.id);
+        if (!didClaim) continue;
+        claimed += 1;
+        const result = await deliverReminder(workspaceId, reminder.id);
+        if (result.success) sent += 1;
+        else failed += 1;
+      }
+    }
+    return res.json({ success: true, automation: "fox-appointment-reminders", scanned, claimed, sent, failed, checkedAt: new Date().toISOString() });
+  })
+);
+
+
+app.get("/api/agents/analytics", secureAsyncRoute("agent analytics", async (req, res) => {
+  const workspaceId = String(req.query.workspaceId || "").trim();
+  const days = Number(req.query.days || 7);
+  if (workspaceId && req.foxAuth?.role !== "super_admin" && String(req.foxAuth?.workspaceId || "") !== workspaceId) return res.status(403).json({ success:false, error:"Workspace access denied" });
+  const analytics = await getAgentAnalytics(workspaceId || undefined, days);
+  return res.json({ success:true, ...analytics });
+}));
+
 // Health Check
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -806,7 +911,7 @@ app.post("/api/meta/publish-post", async (req, res) => {
     // If both attempts failed
     if (!publishResult) {
       console.error("[Meta API] Publishing failed entirely:", publishError);
-      
+
       let userFriendlyError = publishError?.message || "فشل الاتصال بـ Meta Graph API";
       const code = publishError?.code;
       const subcode = publishError?.error_subcode;
@@ -906,7 +1011,7 @@ app.post("/api/meta/subscribe-page", async (req, res) => {
     // Method A: Query String with comma-separated fields
     const fieldsStr = "feed,messages,messaging_postbacks,mention";
     let url = `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps?subscribed_fields=${encodeURIComponent(fieldsStr)}&access_token=${encodeURIComponent(token)}`;
-    
+
     let response = await fetch(url, { method: "POST" });
     let data: any = await response.json();
     console.log(`[Meta Subscribed Apps Method A Result]:`, data);
@@ -962,15 +1067,107 @@ app.post("/api/meta/subscribe-page", async (req, res) => {
   }
 });
 
+// Unified complaint persistence for every customer channel.
+// A complaint is a business record, not a channel-specific feature.
+async function persistUnifiedCustomerComplaint({
+  workspaceId,
+  channel,
+  issue,
+  customerName = "العميل",
+  customerPhone = "",
+  externalChatId = "",
+  externalMessageId = "",
+  sessionId = "",
+  conversationId = "",
+}: {
+  workspaceId: string;
+  channel: string;
+  issue: string;
+  customerName?: string;
+  customerPhone?: string;
+  externalChatId?: string;
+  externalMessageId?: string;
+  sessionId?: string;
+  conversationId?: string;
+}) {
+  const text = String(issue || "").trim();
+  if (!workspaceId || !text) return null;
+  const normalized = text.toLowerCase();
+  const complaintDetected = /(شكوى|شكوي|مشكلة|مشكلتي|بلاغ|متضايق|زعلان|خدمة سيئة|معاملة سيئة|محدش رد|محدش بيرد|complaint|problem|bad service|no response|unhappy|issue)/i.test(normalized);
+  if (!complaintDetected) return null;
+
+  try {
+    const workspace = String(workspaceId);
+    if (externalMessageId) {
+      const existing = await adminDb.collection("complaints")
+        .where("workspaceId", "==", workspace)
+        .where("externalMessageId", "==", String(externalMessageId))
+        .limit(1).get();
+      if (!existing.empty) return String(existing.docs[0].id);
+    }
+
+    const recent = await adminDb.collection("complaints")
+      .where("workspaceId", "==", workspace)
+      .where("channel", "==", String(channel))
+      .limit(50).get();
+    const duplicate = recent.docs.some((doc) => {
+      const d: any = doc.data() || {};
+      return String(d.externalChatId || "") === String(externalChatId || "") &&
+        String(d.issue || "").trim().toLowerCase() === normalized &&
+        d.status !== "Resolved";
+    });
+    if (duplicate) return null;
+
+    const now = new Date().toISOString();
+    const safeChannel = String(channel || "unknown").toLowerCase();
+    const prefix = safeChannel.replace(/[^a-z0-9]+/g, "_").slice(0, 12) || "channel";
+    const complaintId = `cmp_${prefix}_${workspace}_${Date.now()}`;
+    const priority = /(خطير|ضروري|كارثة|كارثه|urgent|emergency|critical)/i.test(normalized) ? "High" : "Medium";
+
+    await adminDb.collection("complaints").doc(complaintId).set({
+      id: complaintId,
+      workspaceId: workspace,
+      customerName: String(customerName || "العميل").trim(),
+      customerPhone: String(customerPhone || "").trim(),
+      phone: String(customerPhone || "").trim(),
+      channel: String(channel),
+      externalChatId: String(externalChatId || ""),
+      externalMessageId: String(externalMessageId || ""),
+      sessionId: String(sessionId || ""),
+      conversationId: String(conversationId || ""),
+      issue: text,
+      aiResponse: "",
+      aiAutoResponse: "",
+      status: "Open",
+      priority,
+      date: now.slice(0, 10),
+      createdAt: now,
+      updatedAt: now,
+      source: "unified_channel_auto_detection",
+    });
+    await adminDb.collection("workspaces").doc(workspace).set({
+      totalComplaints: FieldValue.increment(1),
+      updatedAt: now,
+    }, { merge: true });
+    console.log(`🚨 [FOX Unified Complaint] Created | Workspace=${workspace} | Channel=${channel} | Complaint=${complaintId} | Priority=${priority}`);
+    return complaintId;
+  } catch (error) {
+    console.warn(`⚠️ [FOX Unified Complaint] Persistence failed | Workspace=${workspaceId} | Channel=${channel}`, error);
+    return null;
+  }
+}
+
 // Helper for Direct Messenger DM Auto-Reply
 async function handleMessengerDirectReply({
   senderPsid,
   userMessage,
+  messageId = "",
   pageId = "",
   pageAccessToken
 }: {
   senderPsid: string;
   userMessage: string;
+  messageId?: string;
   pageId?: string;
   pageAccessToken: string;
 }) {
@@ -1007,6 +1204,13 @@ async function handleMessengerDirectReply({
       console.log(`👤 [FOX Human Takeover] Messenger AI suppressed | Workspace=${messengerWorkspaceId} | Conversation=${inboxConversation.id}`);
       return { success: true, replyText: "", handedOff: true };
     }
+
+    await persistUnifiedCustomerComplaint({
+      workspaceId: messengerWorkspaceId, channel: "Messenger", issue: userMessage,
+      customerName: String((inboxConversation as any).customerName || senderPsid),
+      externalChatId: String(senderPsid), externalMessageId: String(messageId || ""),
+      sessionId: messengerSessionId, conversationId: inboxConversation.id,
+    });
   }
 
   try {
@@ -1322,6 +1526,13 @@ async function handleInstagramDirectWebhookEntry(entry: any) {
       continue;
     }
 
+    await persistUnifiedCustomerComplaint({
+      workspaceId: String(workspace.id), channel: "Instagram", issue: text,
+      customerName: String((conversation as any).customerName || senderId),
+      externalChatId: senderId, externalMessageId: messageId,
+      sessionId, conversationId: conversation.id,
+    });
+
     const runtimeWorkspace = await withWorkspaceRuntimeIntegrations(workspace);
     const result = await aiAgentService.generateChatResponse({
       workspace: runtimeWorkspace,
@@ -1484,6 +1695,13 @@ app.post(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/faceb
 
               console.log(`[Meta Webhook] New customer comment detected: "${commentText}" by ${senderName} (Comment ID: ${commentId})`);
 
+              await persistUnifiedCustomerComplaint({
+                workspaceId: String(workspace.id), channel: "Facebook", issue: commentText,
+                customerName: senderName, externalChatId: String(senderId || ""),
+                externalMessageId: String(commentId || ""),
+                sessionId: `facebook:${workspace.id}:${String(senderId || "unknown")}`,
+              });
+
               // Trigger AI auto reply + private DM
               await handleMetaAutoReply({
                 commentId,
@@ -1512,6 +1730,7 @@ app.post(["/api/webhooks/meta-social", "/api/meta/webhook", "/api/webhooks/faceb
               await handleMessengerDirectReply({
                 senderPsid,
                 userMessage: userMsgText,
+                messageId: String(msgObj.message?.mid || msgObj.message?.id || ""),
                 pageId,
                 pageAccessToken: targetToken
               });
@@ -1536,6 +1755,121 @@ app.post("/api/ai/build-system-prompt", (req, res) => {
     return res.status(500).json({ error: "Failed to build system prompt" });
   }
 });
+
+// ============================================================
+// FOX AI AGENCY COMMAND CENTER
+// Control endpoint for executing user-requested tasks
+// Safely executes within the application context
+// ============================================================
+app.post("/api/command/execute", authenticateFirebaseRequest, secureAsyncRoute("command execution", async (req: any, res) => {
+  try {
+    const { command, workspaceId, params } = req.body;
+
+    if (!command) {
+      return res.status(400).json({ error: "Command is required" });
+    }
+
+    // Log the received command for audit
+    console.log(`[COMMAND CENTER] Received command: ${command}`, { workspaceId, params });
+
+    // Execute based on command type
+    let result;
+
+    switch (command) {
+      case "build":
+        // Trigger build process
+        result = await executeBuild();
+        break;
+      case "test":
+        // Run tests
+        result = await executeTests();
+        break;
+      case "lint":
+        // Run linting
+        result = await executeLint();
+        break;
+      case "status":
+        // Check system status
+        result = await checkSystemStatus();
+        break;
+      case "generate-prompt":
+        // Build AI agent prompt
+        const workspace = await getWorkspaceContext(workspaceId);
+        result = aiAgentService.buildSystemInstruction(
+          workspace,
+          params?.messageLang || "ar",
+          params?.channel || "telegram",
+          params?.overrideConfig
+        );
+        break;
+      default:
+        result = { error: `Unknown command: ${command}`, available: ["build", "test", "lint", "status", "generate-prompt"] };
+    }
+
+    return res.json({ success: true, command, result });
+  } catch (err: any) {
+    console.error("[COMMAND CENTER] Execution error:", err);
+    return res.status(500).json({ error: "Command execution failed", details: err.message });
+  }
+}));
+
+async function executeBuild(): Promise<any> {
+  // Use execute_code to run the build script
+  const { execSync } = await import("child_process");
+  try {
+    execSync("bun run build", { cwd: "/opt/data/fox-ai-agency", stdio: "pipe" });
+    return { status: "success", message: "Build completed successfully" };
+  } catch (e: any) {
+    return { status: "error", message: e.message || "Build failed" };
+  }
+}
+
+async function executeTests(): Promise<any> {
+  const { execSync } = await import("child_process");
+  try {
+    execSync("bun run test:integration", { cwd: "/opt/data/fox-ai-agency", stdio: "pipe" });
+    return { status: "success", message: "Tests completed successfully" };
+  } catch (e: any) {
+    return { status: "error", message: e.message || "Tests failed" };
+  }
+}
+
+async function executeLint(): Promise<any> {
+  const { execSync } = await import("child_process");
+  try {
+    execSync("bun run lint", { cwd: "/opt/data/fox-ai-agency", stdio: "pipe" });
+    return { status: "success", message: "Lint completed successfully" };
+  } catch (e: any) {
+    return { status: "error", message: e.message || "Lint failed" };
+  }
+}
+
+async function checkSystemStatus(): Promise<any> {
+  return {
+    nodeVersion: process.version,
+    platform: process.platform,
+    memoryUsage: process.memoryUsage(),
+    uptime: process.uptime(),
+    branch: require("path").basename(require("child_process").execSync("git rev-parse --abbrev-ref HEAD", { cwd: "/opt/data/fox-ai-agency", encoding: "utf-8" }).trim()),
+    status: "operational"
+  };
+}
+
+async function getWorkspaceContext(workspaceId: string): Promise<{ [key: string]: any }> {
+  // Fetch workspace context from Firebase or data store
+  // This is a placeholder - implement based on your actual data structure
+  return {
+    id: workspaceId,
+    name: "Unknown Workspace",
+    industry: "Small Business",
+    aiSettings: {
+      agentName: "AI Assistant",
+      tone: "Friendly",
+      languageMode: "auto",
+      autoBookingEnabled: true,
+    }
+  };
+}
 
 // Centralized AI Agent Chat Endpoint
 
@@ -1579,6 +1913,20 @@ app.post(
     const facts = Array.isArray(req.body?.facts) ? req.body.facts : [];
     const results = await indexWorkspaceKnowledge(workspaceId, facts);
     return res.json({ success: true, workspaceId, indexed: results.filter((r: any) => r.indexed).length, results });
+  }),
+);
+
+app.post(
+  "/api/knowledge/qdrant/delete",
+  authenticateFirebaseRequest,
+  secureAsyncRoute("delete workspace knowledge from qdrant", async (req: any, res: any) => {
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const factId = String(req.body?.factId || "").trim();
+    const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+    if (!trusted) return;
+    if (!factId) return res.status(400).json({ success: false, error: "factId is required" });
+    const result = await deleteKnowledgeFact(factId);
+    return res.json({ success: true, workspaceId, ...result });
   }),
 );
 
@@ -1746,7 +2094,7 @@ async function generateWithFallback(ai: any, params: any) {
 app.post("/api/ai/fox-advisor", async (req, res) => {
   try {
     const { message, chatHistory, workspace } = req.body;
-    
+
     if (!message) {
       return res.status(400).json({ error: "message is required" });
     }
@@ -1773,7 +2121,7 @@ Be professional, analytical, and friendly. Provide actionable advice. You can us
         parts: [{ text: msg.text }]
       }));
     }
-    
+
     contents.push({ role: "user", parts: [{ text: message }] });
 
     const response = await generateWithFallback(ai, {
@@ -1902,7 +2250,7 @@ let agencyBotConfig = {
   responseTone: "friendly", // "friendly" | "formal" | "sales" | "professional"
   enableGeminiAI: true,
   systemPrompt: `أنت المساعد الذكي الرسمي لوكالة FOX AI AGENCY المتخصصة في تقديم حلول الذكاء الاصطناعي وتجهيز البوتات الذكية للشركات والأنشطة التجارية (العيادات، الصيدليات، المطاعم، المتاجر). أجب بأسلوب ودود، مشجع، واحترافي وركز على مساعدة العميل واقتراح الخطة المناسبة له بالجنيه المصري (EGP).`,
-  pricingPlansText: `💼 *خطط وأسعار FOX AI AGENCY (بالجنيه المصري EGP)*:\n\n1️⃣ *Fox Starter* - تجربة مجانية (7 أيام)\n• وكيل ذكاء اصطناعي 1 (تليجرام)\n• 50 محادثة ذكاء اصطناعي\n• إدارة عملاء وحجوزات أساسية\n\n2️⃣ *Fox Business* - 1000 جنيه / شهرياً\n• ربط واتساب + تليجرام\n• 1000 محادثة ذكاء اصطناعي\n• رفع المنيو، الأدوية، أو المنتجات\n• مزامنة مع إكسيل وجوجل شيتس\n\n3️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً\n• محادثات ذكاء اصطناعي غير محدودة\n• أتمتة سير العمل n8n\n• دعم فني مخصص 24/7\n\nاكتب *تسجيل* أو *اشتراك* للبدء فوراً!`,
+  pricingPlansText: `💼 *خطط وأسعار FOX AI AGENCY (بالجنيه المصري EGP)*:\n\n1️⃣ *Fox Business* - 1000 جنيه / شهرياً\n• ربط واتساب + تليجرام\n• 1000 محادثة ذكاء اصطناعي\n• CRM + عمليات النشاط\n• رفع المنيو، الأدوية، المنتجات أو بيانات النشاط\n\n2️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً\n• محادثات ذكاء اصطناعي غير محدودة\n• أتمتة n8n\n• وكلاء متعددون + تحليلات متقدمة\n• دعم وتشغيل مخصص\n\n🔐 التسجيل يحتاج كود تفعيل صادر من FOX AI AGENCY.`,
   fallbackMessage: `شكراً لتواصلك مع FOX AI AGENCY! 🦊\nتم استلام رسالتك وسيقوم فريق العمل أو البوت المباشر بالرد عليك. يمكنك استخدام الأمر /start لعرض قائمة الخيارات الرئيسية.`,
   currency: "EGP",
   contactPhone: "+20 100 000 0000",
@@ -1918,7 +2266,7 @@ let agencyBotConfig = {
       id: "tpl_plans",
       keyword: "/plans",
       title: "عرض خطط الأسعار",
-      reply: `💼 *خطط وأسعار FOX AI AGENCY (بالجنيه المصري EGP)*:\n\n1️⃣ *Fox Starter* - تجربة مجانية (7 أيام)\n2️⃣ *Fox Business* - 1000 جنيه / شهرياً\n3️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً`,
+      reply: `💼 *خطط وأسعار FOX AI AGENCY (بالجنيه المصري EGP)*:\n\n1️⃣ *Fox Business* - 1000 جنيه / شهرياً\n2️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً\n\n🔐 التسجيل يحتاج كود تفعيل صادر من FOX AI AGENCY.`,
     },
     {
       id: "tpl_contact",
@@ -2060,7 +2408,7 @@ let usedTrialEmails = new Set<string>();
 async function hasUsedTrialBefore(chatId: string, phone?: string, email?: string): Promise<boolean> {
   // Check memory store (fast track & offline resilient)
   if (chatId && usedTrialChatIds.has(chatId)) return true;
-  
+
   const cleanPhone = phone ? phone.replace(/[\s\-\+\(\)]/g, "") : null;
   const cleanEmail = email ? email.trim().toLowerCase() : null;
 
@@ -2133,13 +2481,15 @@ function parseIndustryInput(input: string): { key: "Clinic" | "Pharmacy" | "Reta
 }
 
 let telegramUserSessions: Record<string, {
-  step: "IDLE" | "AWAITING_NAME" | "AWAITING_INDUSTRY" | "AWAITING_PHONE" | "AWAITING_CREDENTIALS" | "AWAITING_OTP" | "AWAITING_PLAN_CHOICE" | "AWAITING_RATING" | "MOD_AWAITING_AUTH" | "MOD_SELECT_FIELD" | "MOD_ENTER_NAME" | "MOD_ENTER_INDUSTRY" | "MOD_ENTER_OWNER" | "MOD_ENTER_PHONE" | "MOD_ENTER_EMAIL";
+  step: "IDLE" | "AWAITING_ACTIVATION_CODE" | "AWAITING_NAME" | "AWAITING_INDUSTRY" | "AWAITING_PHONE" | "AWAITING_CREDENTIALS" | "AWAITING_OTP" | "AWAITING_PLAN_CHOICE" | "AWAITING_RATING" | "MOD_AWAITING_AUTH" | "MOD_SELECT_FIELD" | "MOD_ENTER_NAME" | "MOD_ENTER_INDUSTRY" | "MOD_ENTER_OWNER" | "MOD_ENTER_PHONE" | "MOD_ENTER_EMAIL";
   name?: string;
   industry?: string;
   phone?: string;
   email?: string;
   password?: string;
   selectedPlan?: "starter" | "business" | "enterprise";
+  activationCode?: string;
+  activationDurationDays?: number;
   otpCode?: string;
   isVerified?: boolean;
   authenticatedWorkspaceId?: string;
@@ -2205,18 +2555,38 @@ async function finalizeTelegramRegistration(chatId: string, session: any, userIn
   const leadId = `lead_tg_${Date.now().toString().slice(-6)}`;
   const nowStr = new Date().toISOString().split("T")[0];
 
-  // Direct bot registration is untrusted for billing; paid plans require
-  // the authoritative payment transaction endpoint.
-  const planId: "starter" = "starter";
-  const planName = "Fox Starter (Free Trial)";
-
-  // Register trial consumption for single-use trial enforcement
-  if (planId === "starter") {
-    registerTrialConsumption(chatId, session.phone, session.email);
+  // Telegram self-registration is activation-code gated. No public free trial.
+  const activationCode = normalizeFoxActivationCode(session.activationCode);
+  if (!activationCode) {
+    telegramUserSessions[chatId] = { step: "IDLE" };
+    return { newWorkspace: null, newLead: null, reply: "❌ يلزم كود تفعيل صادر من FOX AI AGENCY قبل إنشاء الحساب." };
   }
+  const planId: "business" | "enterprise" = session.selectedPlan === "enterprise" ? "enterprise" : "business";
+  const planName = planId === "enterprise" ? "Fox Enterprise" : "Fox Business";
+  const durationDays = Math.max(1, Math.min(3650, Number(session.activationDurationDays) || 30));
 
   const userEmail = session.email || `${chatId}@telegram.agency`;
   const userPassword = session.password || "";
+
+  const activationRef = adminDb.collection("activationCodes").doc(activationCode);
+  const activationSnapshot = await activationRef.get();
+  if (!activationSnapshot.exists) {
+    telegramUserSessions[chatId] = { step: "IDLE" };
+    return { newWorkspace: null, newLead: null, reply: "❌ كود التفعيل غير صحيح." };
+  }
+  const activation = activationSnapshot.data() || {};
+  if (activation.isUsed) {
+    telegramUserSessions[chatId] = { step: "IDLE" };
+    return { newWorkspace: null, newLead: null, reply: "❌ كود التفعيل تم استخدامه بالفعل." };
+  }
+  if (activation.codeType !== "plan" || !["business", "enterprise"].includes(String(activation.planId || ""))) {
+    telegramUserSessions[chatId] = { step: "IDLE" };
+    return { newWorkspace: null, newLead: null, reply: "❌ كود التفعيل غير صالح لهذا النوع من الحسابات." };
+  }
+  if (activation.expiresAt && new Date(String(activation.expiresAt)).getTime() < Date.now()) {
+    telegramUserSessions[chatId] = { step: "IDLE" };
+    return { newWorkspace: null, newLead: null, reply: "❌ كود التفعيل منتهي الصلاحية." };
+  }
 
   const resolvedIndustryKey = session.industry || (
     (session.name || "").includes("عيادة") ? "Clinic" :
@@ -2244,9 +2614,9 @@ async function finalizeTelegramRegistration(chatId: string, session: any, userIn
     planId: planId,
     isVerified: true,
     activationCode: session.otpCode || "VERIFIED",
-    subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    subscriptionExpiresAt: new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
     entitlementExpiresAt: Timestamp.fromMillis(
-      Date.now() + 30 * 24 * 60 * 60 * 1000
+      Date.now() + durationDays * 24 * 60 * 60 * 1000
     ),
     aiConversationsUsed: 1,
     totalCustomers: 1,
@@ -2337,6 +2707,29 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
     telegramUserSessions[chatId] = { step: "IDLE" };
   }
   const session = telegramUserSessions[chatId];
+
+  // ----------------------------------------------------
+  // ACTIVATION-CODE GATE — Telegram registration has no public trial.
+  // The agency must issue the code or an admin must activate the workspace.
+  // ----------------------------------------------------
+  if (session.step === "AWAITING_ACTIVATION_CODE") {
+    const code = normalizeFoxActivationCode(trimmed);
+    if (!code) return "❌ برجاء إرسال كود التفعيل المرسل لك من FOX AI AGENCY.";
+    const activationSnap = await adminDb.collection("activationCodes").doc(code).get();
+    if (!activationSnap.exists) return "❌ كود التفعيل غير صحيح. برجاء مراجعة FOX AI AGENCY.";
+    const activation = activationSnap.data() || {};
+    if (activation.isUsed) return "❌ كود التفعيل تم استخدامه بالفعل.";
+    if (activation.codeType !== "plan" || !["business", "enterprise"].includes(String(activation.planId || ""))) return "❌ كود التفعيل غير صالح للتسجيل.";
+    if (activation.expiresAt && new Date(String(activation.expiresAt)).getTime() < Date.now()) return "❌ كود التفعيل منتهي الصلاحية.";
+    session.activationCode = code;
+    session.activationDurationDays = Math.max(1, Math.min(3650, Number(activation.durationDays) || 30));
+    session.selectedPlan = String(activation.planId) === "enterprise" ? "enterprise" : "business";
+    session.step = "AWAITING_NAME";
+    telegramUserSessions[chatId] = session;
+    return `✅ كود التفعيل صحيح — **${session.selectedPlan === "enterprise" ? "Fox Enterprise" : "Fox Business"}**.
+
+📌 *الخطوة 1 من 5:* اكتب **اسمك واسم النشاط التجاري**.`;
+  }
 
   // ----------------------------------------------------
   // AUTOMATIC SERVICE RATING HANDLER
@@ -2637,11 +3030,19 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
     }
   }
 
-  // Detect Plan Intent in message
-  let detectedPlan: "starter" | "business" | "enterprise" | undefined = undefined;
-  if (lower.includes("starter") || lower.includes("مجاني") || lower.includes("تجربة") || lower.includes("تجربه") || lower.includes("ستارتر")) {
-    detectedPlan = "starter";
-  } else if (lower.includes("business") || lower.includes("بيزنس") || lower.includes("1000") || lower.includes("بزنس")) {
+  // Universal registration gate: every Telegram signup path requires an agency-issued activation code.
+  if (session.step === "IDLE" && (
+    lower === "/register" || lower === "تسجيل" || lower === "اشتراك" || lower === "تسجيل حساب" ||
+    lower === "تفعيل" || lower === "بدء" || lower.includes("تسجيل ") || lower.includes("اشتراك ")
+  )) {
+    session.step = "AWAITING_ACTIVATION_CODE";
+    telegramUserSessions[chatId] = session;
+    return `🚀 *FOX AI AGENCY* 🦊🤖\n\n🔐 التسجيل عبر تليجرام متاح فقط بكود تفعيل صادر من FOX.\n\nأرسل **كود التفعيل** الذي استلمته من إدارة الوكالة للبدء.\n\n⚠️ لا توجد باقة تجريبية عامة.`;
+  }
+
+  // Public Telegram registration no longer exposes or accepts a trial plan.
+  let detectedPlan: "business" | "enterprise" | undefined = undefined;
+  if (lower.includes("business") || lower.includes("بيزنس") || lower.includes("1000") || lower.includes("بزنس")) {
     detectedPlan = "business";
   } else if (lower.includes("enterprise") || lower.includes("انتربرايز") || lower.includes("2000") || lower.includes("المؤسسات")) {
     detectedPlan = "enterprise";
@@ -2666,11 +3067,6 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
     const parsedInd = parseIndustryInput(cleanedName);
     session.industry = parsedInd.key;
 
-    // Trial Anti-Fraud check for single-line registration
-    if (session.selectedPlan === "starter" && await hasUsedTrialBefore(chatId, session.phone)) {
-      session.selectedPlan = "business";
-    }
-
     session.step = "AWAITING_CREDENTIALS";
     telegramUserSessions[chatId] = session;
 
@@ -2689,7 +3085,7 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
     session.step = "AWAITING_INDUSTRY";
     telegramUserSessions[chatId] = session;
 
-    const pName = session.selectedPlan === "enterprise" ? "Fox Enterprise" : session.selectedPlan === "starter" ? "Fox Starter (تجريبي)" : "Fox Business";
+    const pName = session.selectedPlan === "enterprise" ? "Fox Enterprise" : "Fox Business";
     return `ممتاز يا ${session.name}! 📝 (باقة ${pName})\n\n📌 *الخطوة 2 من 5 (تحديد نوع النشاط التجاري)*:\nنوع النشاط يحدد شكل وتصميم **لوحة التحكم المخصصة** لنشاطك (عيادة، صيدلية، متجر، مركز كورسات، مطعم).\n\nأرسل رقم الخيار المناسب أو اسم نوع نشاطك:\n1️⃣ 🏥 **عيادة / مركز طبي** (Clinic)\n2️⃣ 💊 **صيدلية** (Pharmacy)\n3️⃣ 🛒 **متجر / تجارة إلكترونية** (Retail)\n4️⃣ 📚 **مركز كورسات / تعليمي** (Course Center)\n5️⃣ 🍽️ **مطعم / كافيه** (Restaurant)\n6️⃣ 🏢 **نشاط تجاري عام / خدمات أخرى** (Small Business)`;
   }
 
@@ -2706,15 +3102,6 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
   // STEP 3: AWAITING_PHONE
   if (session.step === "AWAITING_PHONE") {
     session.phone = trimmed;
-
-    // Trial Anti-Fraud check for Phone
-    if (session.selectedPlan === "starter" && await hasUsedTrialBefore(chatId, session.phone)) {
-      session.selectedPlan = "business";
-      session.step = "AWAITING_CREDENTIALS";
-      telegramUserSessions[chatId] = session;
-
-      return `⚠️ *عفواً، رقم الهاتف (${session.phone}) قد استفاد بالفعل من الباقة التجريبية المجانية سابقاً!* 🚫\n\nتُتاح الباقة التجريبية **مرة واحدة فقط لكل هاتف**.\nتم تحويل طلبك تلقائياً لباقة **Fox Business** (1000 جنيه / شهرياً).\n\n📌 *الخطوة 4 من 5 (بيانات الدخول للوحة التحكم)*:\nبرجاء كتابة **البريد الإلكتروني وكلمة السر** لدخول لوحتك (مثال: \`ahmed@gmail.com YourStrongPassword\`):`;
-    }
 
     session.step = "AWAITING_CREDENTIALS";
     telegramUserSessions[chatId] = session;
@@ -2763,11 +3150,6 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
       return `تم حفظ البريد الإلكتروني: \`${session.email}\` 📧\n\nبرجاء كتابة **كلمة السر** المرغوبة لحسابك للدخول إلى لوحة التحكم:`;
     }
 
-    // Trial Anti-Fraud check for Email
-    if (session.selectedPlan === "starter" && await hasUsedTrialBefore(chatId, session.phone, session.email)) {
-      session.selectedPlan = "business";
-    }
-
     // Generate 6-Digit OTP Verification Code
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     session.otpCode = otpCode;
@@ -2788,6 +3170,21 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
       .catch((err) => {
         console.error(`[Telegram Bot] Verification email failed:`, err);
       });
+
+    // Telegram is an additional OTP delivery channel when registration is initiated
+    // from the Telegram bot. The same one-time code remains valid for this session.
+    try {
+      const token = activeTelegramToken || process.env.TELEGRAM_BOT_TOKEN || "";
+      if (token && chatId) {
+        await callTelegramApi("sendMessage", {
+          chat_id: chatId,
+          text: `🔐 FOX AI AGENCY — كود تفعيل حسابك\n\nالكود: ${otpCode}\nصلاحية الكود: 15 دقيقة\n\nلا تشارك الكود مع أي شخص.`,
+        });
+        console.log(`[Telegram OTP] Verification code delivered to chat ${chatId}`);
+      }
+    } catch (telegramOtpError) {
+      console.warn(`[Telegram OTP] Delivery failed; email OTP remains active.`, telegramOtpError);
+    }
 
     return `📧 *تم إرسال كود التفعيل إلى بريدك الإلكتروني!* 📩\n\nتم إرسال رمز التحقق والتفعيل المكون من 6 أرقام عبر البريد الإلكتروني إلى: \`${session.email}\`\n\n📌 *الخطوة الأخيرة (4 من 4 - تأكيد البريد وتفعيل الحساب)*:\nبرجاء كتابة كود التفعيل المكون من 6 أرقام الآن لتأكيد تفعيل الحساب فوراً:`;
   }
@@ -2821,24 +3218,10 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
   }
 
   if (session.step === "AWAITING_PLAN_CHOICE") {
-    if (trimmed === "1" || lower.includes("starter") || lower.includes("ستارتر") || lower.includes("مجاني")) {
-      if (await hasUsedTrialBefore(chatId, session.phone, session.email)) {
-        return `⚠️ *عفواً، لقد استفدت بالفعل من التجربة المجانية من قبل!* 🚫\n\nتُتاح الباقة التجريبية **مرة واحدة فقط لكل حساب/هاتف/بريد**.\n\nبرجاء اختيار إحدى الباقات المدفوعة للاستمرار:\n2️⃣ *Fox Business* - 1000 جنيه / شهرياً\n3️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً\n\nأرسل **2** أو **3** للاختيار وتأكيد التسجيل!`;
-      }
-      session.selectedPlan = "starter";
-    } else if (trimmed === "3" || lower.includes("enterprise") || lower.includes("انتربرايز")) {
-      session.selectedPlan = "enterprise";
-    } else {
-      session.selectedPlan = "business";
-    }
-
-    session.step = "AWAITING_CREDENTIALS";
-    telegramUserSessions[chatId] = session;
-
-    return `ممتاز! تم اختيار باقة **${session.selectedPlan === "enterprise" ? "Fox Enterprise" : session.selectedPlan === "starter" ? "Fox Starter" : "Fox Business"}** 💼\n\n📌 *الخطوة 3 من 4 (بيانات الدخول للوحة التحكم)*:\nبرجاء إرسال **البريد الإلكتروني وكلمة السر** (مثال: \`ahmed@gmail.com YourStrongPassword\`):`;
+    return "🚫 لا توجد باقة تجريبية عامة حالياً. للحصول على حساب FOX، اطلب كود تفعيل من إدارة الوكالة.";
   }
 
-  // Trigger Registration Flow Start on Registration Keywords or Plan Selection
+  // Trigger Registration Flow Start on Registration Keywords or paid-plan selection
   if (
     lower === "/register" ||
     lower === "تسجيل" ||
@@ -2852,33 +3235,18 @@ async function processAgencyBotMessage(chatId: string, userInfo: any, userMsg: s
     detectedPlan !== undefined
   ) {
     if (detectedPlan) {
-      if (detectedPlan === "starter" && await hasUsedTrialBefore(chatId)) {
-        return `⚠️ *عفواً، لقد استفدت بالفعل من الباقة التجريبية المجانية لهذا الحساب!* 🚫\n\nنظام FOX AI AGENCY يمنح التجربة المجانية **مرة واحدة فقط لكل شات/رقم هاتف** لضمان أعلى مستوى من الجودة والأمان.\n\nبرجاء اختيار إحدى الباقات المدفوعة لتفعيل حسابك:\n1️⃣ *Fox Business* - 1000 جنيه / شهرياً (تكامل واتساب + تليجرام + CRM)\n2️⃣ *Fox Enterprise* - 2000 جنيه / شهرياً (غير محدود + أتمتة n8n)\n\nأرسل **1** أو **2** للاختيار المباشر!`;
-      }
       session.selectedPlan = detectedPlan;
-    } else if (lower === "1") {
-      if (await hasUsedTrialBefore(chatId)) {
-        return `⚠️ *عفواً، لقد استفدت بالفعل من التجربة المجانية لهذا الحساب!* 🚫\n\nبرجاء اختيار إحدى الباقات المدفوعة:\n2️⃣ *Fox Business* (1000 EGP)\n3️⃣ *Fox Enterprise* (2000 EGP)`;
-      }
-      session.selectedPlan = "starter";
     } else if (lower === "3") {
       session.selectedPlan = "enterprise";
     } else if (lower === "2") {
       session.selectedPlan = "business";
+    } else {
+      session.selectedPlan = "business";
     }
 
-    session.step = "AWAITING_NAME";
+    session.step = "AWAITING_ACTIVATION_CODE";
     telegramUserSessions[chatId] = session;
-
-    const pName = session.selectedPlan
-      ? session.selectedPlan === "enterprise"
-        ? "Fox Enterprise"
-        : session.selectedPlan === "starter"
-        ? "Fox Starter (تجريبي)"
-        : "Fox Business"
-      : null;
-
-    return `🚀 *مرحباً بك في خدمة التسجيل المباشر - FOX AI AGENCY* 🦊🤖\n\n${pName ? `🎯 الباقة المختارة: **${pName}**\n\n` : ""}📌 *الخطوة 1 من 4*:\nبرجاء كتابة **اسمك واسم النشاط التجاري** (مثال: د. أحمد - عيادة الشفاء أو صيدلية الأمل):`;
+    return `🚀 *مرحباً بك في FOX AI AGENCY* 🦊🤖\n\n🔐 التسجيل عبر تليجرام متاح فقط بكود تفعيل صادر من FOX.\n\nأرسل **كود التفعيل** الذي استلمته من إدارة الوكالة للبدء.\n\n💼 الباقات المتاحة: *Business* (1000 ج.م/شهر) أو *Enterprise* (2000 ج.م/شهر).\n⚠️ لا توجد باقة تجريبية عامة.`;
   }
 
   // Otherwise, fallback to template/Gemini bot response
@@ -3849,11 +4217,11 @@ async function authenticateFirebaseRegistrationRequest(
 
     const decoded = await adminAuth.verifyIdToken(idToken);
     const verifiedEmail = normalizeRegistrationEmail(decoded.email);
-    if (!verifiedEmail || decoded.email_verified !== true) {
+    if (!verifiedEmail) {
       return res.status(403).json({
         success: false,
-        code: "REGISTRATION_EMAIL_NOT_VERIFIED",
-        error: "Email verification is required before workspace provisioning",
+        code: "REGISTRATION_EMAIL_REQUIRED",
+        error: "A valid email is required before workspace provisioning",
       });
     }
     req.foxRegistrationIdentity = {
@@ -3891,6 +4259,8 @@ app.post(
     const workspaceName = String(req.body?.workspaceName || "").trim();
     const ownerName = String(req.body?.ownerName || "").trim();
     const phone = String(req.body?.phone || "").trim();
+    const activationCode = normalizeFoxActivationCode(req.body?.activationCode);
+    const otpVerificationToken = String(req.body?.otpVerificationToken || "").trim();
     const industry = String(req.body?.industry || "").trim();
     const supportedIndustries = new Set([
       "Clinic",
@@ -3927,9 +4297,16 @@ app.post(
       });
     }
 
+    if (!activationCode) {
+      return res.status(400).json({ success: false, code: "ACTIVATION_CODE_REQUIRED", error: "A FOX activation code is required." });
+    }
+    const otpRecord = otpVerificationTokens[otpVerificationToken];
+    if (!otpRecord || otpRecord.email !== identity.email || otpRecord.expiresAt < Date.now()) {
+      return res.status(403).json({ success: false, code: "REGISTRATION_OTP_REQUIRED", error: "Email OTP verification is required before workspace provisioning." });
+    }
+
     const now = new Date();
     const nowIso = now.toISOString();
-    const expiryMillis = now.getTime() + 30 * 24 * 60 * 60 * 1000;
     const workspaceRef = adminDb.collection("workspaces").doc(workspaceId);
     const profileRef = adminDb.collection("users").doc(identity.uid);
     const emailClaimRef = adminDb
@@ -3938,6 +4315,7 @@ app.post(
     const phoneClaimRef = adminDb
       .collection("trialClaims")
       .doc(registrationClaimId("phone", normalizedPhone));
+    const activationCodeRef = adminDb.collection("activationCodes").doc(activationCode);
 
     try {
       const provisioned = await adminDb.runTransaction(async (transaction) => {
@@ -3966,17 +4344,26 @@ app.post(
           );
         }
 
-        const [workspaceSnapshot, emailClaim, phoneClaim] = await Promise.all([
+        const [workspaceSnapshot, emailClaim, phoneClaim, activationSnapshot] = await Promise.all([
           transaction.get(workspaceRef),
           transaction.get(emailClaimRef),
           transaction.get(phoneClaimRef),
+          transaction.get(activationCodeRef),
         ]);
         if (workspaceSnapshot.exists) {
           throw new Error("REGISTRATION_WORKSPACE_CONFLICT");
         }
         if (emailClaim.exists || phoneClaim.exists) {
-          throw new Error("REGISTRATION_TRIAL_ALREADY_CLAIMED");
+          throw new Error("REGISTRATION_ALREADY_CLAIMED");
         }
+        if (!activationSnapshot.exists) throw new Error("INVALID_ACTIVATION_CODE");
+        const activation = activationSnapshot.data() || {};
+        if (activation.isUsed) throw new Error("ACTIVATION_CODE_ALREADY_USED");
+        if (activation.codeType !== "plan" || !["business", "enterprise"].includes(String(activation.planId || ""))) throw new Error("INVALID_ACTIVATION_CODE");
+        if (activation.expiresAt && new Date(String(activation.expiresAt)).getTime() < Date.now()) throw new Error("ACTIVATION_CODE_EXPIRED");
+        const planId = String(activation.planId);
+        const durationDays = Math.max(1, Math.min(3650, Number(activation.durationDays) || 30));
+        const expiryMillis = now.getTime() + durationDays * 24 * 60 * 60 * 1000;
 
         const workspace = {
           id: workspaceId,
@@ -3987,7 +4374,7 @@ app.post(
           ownerName,
           phone,
           status: "active",
-          planId: "starter",
+          planId,
           subscriptionExpiresAt: new Date(expiryMillis)
             .toISOString()
             .split("T")[0],
@@ -4033,9 +4420,11 @@ app.post(
         transaction.create(profileRef, profile);
         transaction.create(emailClaimRef, { ...claim, kind: "email" });
         transaction.create(phoneClaimRef, { ...claim, kind: "phone" });
+        transaction.update(activationCodeRef, { isUsed: true, usedByWorkspaceId: workspaceId, usedByWorkspaceName: workspaceName, usedAt: nowIso });
         return authoritativeWorkspaceFromDocument(workspaceId, workspace);
       });
 
+      delete otpVerificationTokens[otpVerificationToken];
       registeredWorkspacesStore = [
         provisioned,
         ...registeredWorkspacesStore.filter(
@@ -4049,12 +4438,19 @@ app.post(
       });
     } catch (error: any) {
       const code = String(error?.message || "");
-      if (code === "REGISTRATION_TRIAL_ALREADY_CLAIMED") {
+      if (code === "REGISTRATION_ALREADY_CLAIMED") {
         return res.status(409).json({
           success: false,
           code,
-          error: "This email or phone already used the starter trial",
+          error: "This email or phone is already registered.",
         });
+      }
+      if (code === "REGISTRATION_OTP_REQUIRED") {
+        return res.status(403).json({ success: false, code, error: "Email OTP verification is required before workspace provisioning." });
+      }
+      if (code === "INVALID_ACTIVATION_CODE" || code === "ACTIVATION_CODE_ALREADY_USED" || code === "ACTIVATION_CODE_EXPIRED") {
+        const status = code === "ACTIVATION_CODE_ALREADY_USED" ? 409 : code === "ACTIVATION_CODE_EXPIRED" ? 410 : 400;
+        return res.status(status).json({ success: false, code, error: "The activation code is invalid, used, or expired." });
       }
       if (
         code === "REGISTRATION_PROFILE_CONFLICT" ||
@@ -4316,6 +4712,7 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
   const [
     sheetsToken,
     crmWebhookUrl,
+    geminiApiKey,
     clinicServices,
     doctors,
     knowledgeBase,
@@ -4327,6 +4724,7 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
   ] = await Promise.all([
     getWorkspaceSecret(workspaceId, "googleSheetsAccessToken"),
     getWorkspaceSecret(workspaceId, "externalCrmWebhookUrl"),
+    getWorkspaceSecret(workspaceId, "geminiApiKey"),
     workspaceDataService.getClinicServices(workspaceId),
     workspaceDataService.getDoctors(workspaceId),
     workspaceDataService.getKnowledgeFacts(workspaceId),
@@ -4356,8 +4754,109 @@ async function withWorkspaceRuntimeIntegrations(workspace: any) {
   if (crmWebhookUrl) {
     runtimeWorkspace.externalCrmWebhookUrl = crmWebhookUrl;
   }
+  if (geminiApiKey) {
+    runtimeWorkspace.geminiApiKey = geminiApiKey;
+  }
 
   return runtimeWorkspace;
+}
+
+async function dispatchWorkspaceTelegramThroughN8n(
+  workspace: any,
+  chatId: string,
+  userMsg: string,
+) {
+  const n8nUrl = String(process.env.N8N_WEBHOOK_URL || "").trim();
+  const n8nSecret = String(process.env.N8N_WEBHOOK_SECRET || "").trim();
+
+  if (!n8nUrl || !n8nSecret) {
+    throw new Error("N8N_NOT_CONFIGURED");
+  }
+
+  const routing = await getWorkspaceAgentRouting(
+    String(workspace.id),
+    workspace.industry,
+  );
+  // The Brain is authoritative for customer language. The deterministic
+  // router is only the safety fallback when Brain classification fails.
+  const brain = await aiAgentService.classifyIntent(
+    await withWorkspaceRuntimeIntegrations(workspace),
+    userMsg,
+    [],
+  );
+  const brainAgent = String(brain.selectedAgent || '').trim();
+  const routed =
+    brainAgent && routing.enabledAgents.includes(brainAgent as any)
+      ? { agent: brainAgent as any, reason: `brain:${brain.intent}:${brain.confidence.toFixed(2)}` }
+      : routeWorkspaceAgent(userMsg, routing);
+  console.log(
+    `🧠 [FOX Telegram Brain] Intent=${brain.intent} | Agent=${brain.selectedAgent} | Confidence=${brain.confidence} | Reason=${routed.reason}`
+  );
+  const sessionId = `telegram:${workspace.id}:${chatId}`;
+  const conversation = await conversationService.getOrCreateConversation(
+    String(workspace.id),
+    { sessionId, channel: "telegram", externalChatId: String(chatId) }
+  );
+  const previousAgent = String(conversation.activeAgent || "").trim();
+  if (previousAgent !== String(routed.agent)) {
+    await conversationService.transferAgent(
+      String(workspace.id),
+      conversation.id,
+      String(routed.agent),
+      `intent_reroute:${routed.reason}`
+    );
+  }
+  const recentMessages = await conversationService.getRecentMessages(
+    String(workspace.id), conversation.id, 20
+  );
+
+  console.log(
+    `🧭 [FOX Telegram → n8n] Workspace=${workspace.id} | Agent=${routed.agent} | Previous=${previousAgent || "none"} | Reason=${routed.reason} | Session=${sessionId}`
+  );
+
+  const response = await fetch(n8nUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-FOX-N8N-Secret": n8nSecret,
+    },
+    body: JSON.stringify({
+      workspaceId: String(workspace.id),
+      agent: String(routed.agent),
+      message: userMsg,
+      channel: "telegram",
+      sessionId,
+      chatId: String(chatId),
+      conversationId: conversation.id,
+      previousAgent: previousAgent || null,
+      chatHistory: recentMessages.map((m: any) => ({
+        role: m.sender === "customer" ? "user" : m.sender === "human" ? "assistant" : "assistant",
+        sender: m.sender,
+        text: m.text,
+        agentRole: m.agentRole || null,
+      })),
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+
+  const text = await response.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+
+  if (!response.ok) {
+    throw new Error(`N8N_HTTP_${response.status}`);
+  }
+
+  if (data?.error?.message) {
+    throw new Error(`N8N_AGENT_ERROR: ${data.error.message}`);
+  }
+
+  const result = data?.response ? data : data?.body?.response ? data.body : data;
+  if (!result?.response && !result?.aiResponse) {
+    throw new Error("N8N_EMPTY_AGENT_RESPONSE");
+  }
+
+  return result;
 }
 
 async function generateWorkspaceTelegramReply(
@@ -4384,21 +4883,34 @@ async function generateWorkspaceTelegramReply(
     };
   }
 
-  const result = await aiAgentService.generateChatResponse({
-    workspace:
-      await withWorkspaceRuntimeIntegrations(
-        workspace
-      ),
-    message: userMsg,
-    channel: "telegram",
-    sessionId: `telegram:${workspace.id}:${chatId}`,
-  });
+  try {
+    const result = await dispatchWorkspaceTelegramThroughN8n(
+      workspace,
+      chatId,
+      userMsg,
+    );
 
-  return {
-    text: result?.response || result?.aiResponse || "شكراً لتواصلك معنا. كيف يمكننا مساعدتك؟",
-    handoffRequired: result?.handoffRequired === true,
-    handoffReason: result?.handoffReason || "AI could not safely complete the request",
-  };
+    return {
+      text: result?.response || result?.aiResponse || "",
+      handoffRequired: result?.handoffRequired === true,
+      handoffReason: result?.handoffReason || "AI could not safely complete the request",
+      source: result?.source || "n8n_agent",
+      routing: result?.routing || null,
+    };
+  } catch (n8nError: any) {
+    console.error(
+      `❌ [FOX Telegram → n8n] Failed | Workspace=${workspace.id} | Chat=${chatId} | ${n8nError?.message || n8nError}`
+    );
+
+    // Do not silently bypass n8n. Telegram must not claim an AI response
+    // came from the agent layer when orchestration is unavailable.
+    return {
+      text: "حصلت مشكلة مؤقتة في تشغيل المساعد. تم تسجيل الطلب، برجاء المحاولة مرة أخرى بعد قليل أو طلب التحدث مع موظف.",
+      handoffRequired: false,
+      handoffReason: "n8n_orchestration_unavailable",
+      source: "n8n_unavailable",
+    };
+  }
 }
 
 const workspaceTelegramRuntimeTokens =
@@ -4902,6 +5414,45 @@ async function handleWorkspaceTelegramUpdate(
     }
   }
 
+  // -------------------------------------------------------
+  // AGENT-TO-AGENT HANDOFF
+  // Keep the same conversation/session while switching the
+  // responsible specialist based on the new message intent.
+  // -------------------------------------------------------
+  const routing = await getWorkspaceAgentRouting(
+    String(workspace.id),
+    workspace.industry,
+  );
+  const routedAgent = routeWorkspaceAgent(userMsg, routing);
+  const currentAgent = String(inboxConversation.activeAgent || "").trim();
+
+  if (String((inboxConversation as any).assignedTo || "ai") !== "human" && currentAgent !== routedAgent.agent) {
+    const transfer = await conversationService.transferAgent(
+      String(workspace.id),
+      inboxConversation.id,
+      String(routedAgent.agent),
+      `intent_reroute:${routedAgent.reason}`,
+    );
+
+    if (transfer.transferred) {
+      console.log(
+        `🔄 [FOX Agent Handoff] Workspace=${workspace.id} | Conversation=${inboxConversation.id} | ${transfer.from || "none"} -> ${transfer.to} | Reason=${routedAgent.reason}`
+      );
+
+      await conversationService.appendMessage(
+        String(workspace.id),
+        inboxConversation.id,
+        {
+          sessionId: telegramSessionId,
+          channel: "telegram",
+          sender: "system",
+          text: `تم تحويل المحادثة تلقائياً إلى المساعد المختص (${routedAgent.agent}) لمتابعة نفس المحادثة.`,
+          agentRole: String(routedAgent.agent),
+        }
+      );
+    }
+  }
+
   // Normal tenant AI flow
   const replyResult = await generateWorkspaceTelegramReply(
     workspace,
@@ -4986,6 +5537,7 @@ async function handleWorkspaceTelegramUpdate(
       channel: "telegram",
       sender: "ai",
       text: replyText,
+      agentRole: String(replyResult?.routing?.selectedAgent || routedAgent.agent),
     }
   );
 
@@ -6227,6 +6779,36 @@ async function processWorkspaceWhatsAppWebhook(
           if (inboxConversation.assignedTo === "human") {
             console.log(`👤 [FOX Human Takeover] WhatsApp AI suppressed | Workspace=${workspaceId} | Conversation=${inboxConversation.id}`);
             continue;
+          }
+
+          // Persist customer complaints from WhatsApp into the same CRM collection
+          // used by the dashboard. This keeps Telegram, WhatsApp and manual complaints
+          // visible in one tenant-scoped complaints view.
+          const normalizedWhatsAppMessage = userMsg.toLowerCase();
+          const complaintDetected = /(شكوى|شكوي|مشكلة|مشكلتي|بلاغ|متضايق|زعلان|خدمة سيئة|معاملة سيئة|محدش رد|محدش بيرد|complaint|problem|bad service|no response)/i.test(normalizedWhatsAppMessage);
+          if (complaintDetected) {
+            try {
+              const existingComplaint = await adminDb.collection("complaints")
+                .where("workspaceId", "==", String(workspaceId))
+                .where("externalMessageId", "==", messageId)
+                .limit(1).get();
+              if (existingComplaint.empty) {
+                const contact = Array.isArray(value?.contacts) ? value.contacts.find((c: any) => String(c?.wa_id || "") === customerNumber) : null;
+                const customerName = String(contact?.profile?.name || customerNumber).trim();
+                const complaintId = `cmp_wa_${String(workspaceId)}_${Date.now()}`;
+                const priority = /(خطير|ضروري|كارثة|urgent|emergency)/i.test(normalizedWhatsAppMessage) ? "High" : "Medium";
+                const now = new Date().toISOString();
+                await adminDb.collection("complaints").doc(complaintId).set({
+                  id: complaintId, workspaceId: String(workspaceId), customerName, customerPhone: customerNumber, phone: customerNumber,
+                  channel: "WhatsApp", externalChatId: customerNumber, externalMessageId: messageId, sessionId: whatsappSessionId, conversationId: inboxConversation.id,
+                  issue: userMsg, aiResponse: "", aiAutoResponse: "", status: "Open", priority, date: now.slice(0,10), createdAt: now, updatedAt: now, source: "whatsapp_auto_detection"
+                });
+                await adminDb.collection("workspaces").doc(String(workspaceId)).set({ totalComplaints: FieldValue.increment(1), updatedAt: now }, { merge: true });
+                console.log(`🚨 [FOX WhatsApp Complaint] Created | Workspace=${workspaceId} | Complaint=${complaintId} | Priority=${priority}`);
+              }
+            } catch (complaintError) {
+              console.warn(`⚠️ [FOX WhatsApp Complaint] Persistence failed | Workspace=${workspaceId}`, complaintError);
+            }
           }
 
           const replyResult = await generateWorkspaceWhatsAppReply(
@@ -7769,7 +8351,6 @@ app.post(
       } = req.body || {};
 
       const allowedPlans = [
-        "starter",
         "business",
         "enterprise",
       ];
@@ -7864,7 +8445,7 @@ app.post(
       const expiresAt =
         new Date(
           now.getTime() +
-            90 *
+            safeDuration *
               24 *
               60 *
               60 *
@@ -8147,7 +8728,6 @@ app.post(
 
           if (codeType === "plan") {
             const allowedPlans = [
-              "starter",
               "business",
               "enterprise",
             ];
@@ -8844,6 +9424,35 @@ app.post(
 
 
 // ============================================================
+// Workspace Gemini Key Vault — optional tenant-owned fallback key
+// ============================================================
+app.get("/api/workspaces/:workspaceId/ai/gemini-key", authenticateFirebaseRequest, secureAsyncRoute("gemini key status", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+  if (!trusted) return;
+  const configured = await getWorkspaceSecret(workspaceId, "geminiApiKey");
+  return res.json({ success: true, configured: Boolean(configured), provider: configured ? "workspace_gemini" : "fox_fallback" });
+}));
+
+app.put("/api/workspaces/:workspaceId/ai/gemini-key", authenticateFirebaseRequest, secureAsyncRoute("save workspace gemini key", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+  if (!trusted) return;
+  const key = String(req.body?.apiKey || "").trim();
+  if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) return res.status(400).json({ success: false, code: "INVALID_GEMINI_KEY", error: "Invalid Gemini API key format" });
+  await setWorkspaceSecret(workspaceId, "geminiApiKey", key);
+  return res.json({ success: true, configured: true });
+}));
+
+app.delete("/api/workspaces/:workspaceId/ai/gemini-key", authenticateFirebaseRequest, secureAsyncRoute("remove workspace gemini key", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const trusted = requireAuthenticatedWorkspace(req, res, workspaceId);
+  if (!trusted) return;
+  await deleteWorkspaceSecret(workspaceId, "geminiApiKey");
+  return res.json({ success: true, configured: false });
+}));
+
+// ============================================================
 // Workspace Agent Assignment — tenant-scoped control plane
 // ============================================================
 app.get(
@@ -8902,6 +9511,9 @@ app.post(
     const workspaceId = String(body.workspaceId || "").trim();
     const message = String(body.message || body.customerMessage || "").trim();
     const requestedAgent = String(body.agent || "").trim().toLowerCase();
+    // n8n's legacy default is `support`; it is not a semantic instruction.
+    // Treat it as empty so the Brain can understand the customer's language.
+    const semanticAgentOverride = requestedAgent && requestedAgent !== "support" ? requestedAgent : "";
     const channel = String(body.channel || "n8n").trim().toLowerCase();
     const sessionId = String(body.sessionId || `n8n:${workspaceId}:${Date.now()}`).trim();
 
@@ -8937,9 +9549,25 @@ app.post(
     };
 
     const routing = await getWorkspaceAgentRouting(workspaceId, trustedWorkspace.industry);
-    const routed = requestedAgent && routing.enabledAgents.includes(requestedAgent as any)
-      ? { agent: requestedAgent as any, reason: "workflow_agent" }
-      : routeWorkspaceAgent(message, routing);
+    let routed: { agent: any; reason: string };
+    if (semanticAgentOverride && routing.enabledAgents.includes(semanticAgentOverride as any)) {
+      routed = { agent: semanticAgentOverride as any, reason: "workflow_agent" };
+    } else {
+      // The Brain is the authoritative semantic router for n8n events.
+      // Keyword routing remains only as a deterministic safety fallback.
+      const brain = await aiAgentService.classifyIntent(
+        await withWorkspaceRuntimeIntegrations(trustedWorkspace),
+        message,
+        Array.isArray(body.chatHistory) ? body.chatHistory : [],
+      );
+      const brainAgent = String(brain.selectedAgent || "").trim() as any;
+      if (brainAgent && routing.enabledAgents.includes(brainAgent)) {
+        routed = { agent: brainAgent, reason: `brain:${brain.intent}:${brain.confidence.toFixed(2)}` };
+      } else {
+        routed = routeWorkspaceAgent(message, routing);
+      }
+      console.log(`🧠 [FOX n8n Brain Router] Intent=${brain.intent} | Agent=${brain.selectedAgent} | Confidence=${brain.confidence} | Reason=${routed.reason}`);
+    }
     const agent = String(routed.agent).toLowerCase();
     const selectedPrompt = agentPrompts[agent] || agentPrompts.support;
     const roleMap: Record<string, any> = { appointments: "clinic-appointments", complaints: "complaints-suggestions", pharmacy_sales: "pharmacy-sales", retail_sales: "retail-sales", restaurant: "restaurant-operations", course_center: "course-center", marketing: "marketing", support: "customer-support", sales: "sales", "customer-support": "customer-support", knowledge: "knowledge", "clinic-appointments": "clinic-appointments", "complaints-suggestions": "complaints-suggestions", "pharmacy-sales": "pharmacy-sales", "retail-sales": "retail-sales", "restaurant-operations": "restaurant-operations", "course-center": "course-center" };
@@ -9385,6 +10013,18 @@ app.get(
 );
 
 
+
+
+// FOX Marketing Publisher — real due-post runner. AUTO_PUBLISH only; manual records wait for owner approval.
+let marketingRunnerBusy = false;
+setInterval(() => {
+  if (marketingRunnerBusy) return;
+  marketingRunnerBusy = true;
+  void runDueMarketingPublishing()
+    .then((stats) => { if (stats.published || stats.failed) console.log(`📣 [FOX Marketing Publisher] Published=${stats.published} Failed=${stats.failed} SkippedManual=${stats.skipped}`); })
+    .catch((error) => console.warn("[FOX Marketing Publisher] cycle failed:", error?.message || error))
+    .finally(() => { marketingRunnerBusy = false; });
+}, 60_000);
 
 // ============================================================
 // FOX RUNTIME READINESS V1
