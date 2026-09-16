@@ -1,1 +1,219 @@
-{"name":"15-daily-analytics-digest","nodes":[{"id":"schedule","type":"n8n-nodes-base.scheduleTrigger","parameters":{"mode":"everyDay","hour":8,"minute":0}},{"id":"aggregate","type":"n8n-nodes-base.function","parameters":{"functionCode":"// Aggregate from Firestore collections: telegram_events, whatsapp_events, instagram_events, messenger_events."}},{"id":"report","type":"n8n-nodes-base.emailSend","parameters":{"to":"=$env.DAILY_REPORT_EMAIL","subject":"FOX AI Daily Multi-Channel Digest"}}],"tags":["analytics","digest","multi-channel","daily"],"notes":"Reads from CRM only; no secrets in file."}
+{
+  "name": "FOX Daily Multi-Channel Analytics Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c1b6a1d9-73bc-47ad-8dfc-98450ffa9682",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "4a06c9a3-7b39-44ee-9bd0-e64aa73a74cf",
+              "leftValue": "={{ $env.FOX_DEFAULT_WORKSPACE_ID || $env.FOX_ANALYTICS_WORKSPACE_ID ? 'configured' : 'NO' }}",
+              "rightValue": "configured",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b7829d33-5cd3-4d8e-819b-a4c7a7d4b98f",
+      "name": "Require Analytics Config",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1b5b3c2-84d4-4d2f-9902-a6327f0d5d11",
+              "name": "workflow",
+              "value": "FOX Daily Multi-Channel Analytics Digest",
+              "type": "string"
+            },
+            {
+              "id": "d1a2341f-3b6c-4fbd-9ab6-b2b3c3f6a8a7",
+              "name": "event",
+              "value": "analytics.daily_digest",
+              "type": "string"
+            },
+            {
+              "id": "e6f7a73f-3b1a-4b06-9b4e-ef71d72fea58",
+              "name": "workspaceId",
+              "value": "={{ $env.FOX_DEFAULT_WORKSPACE_ID || $env.FOX_ANALYTICS_WORKSPACE_ID || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8d29d9b3-6d1b-4328-b132-880ddaa03916",
+      "name": "Analytics Digest Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/agents/analytics?workspaceId={{ $json.workspaceId }}&days=7",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "9c1a5b92-bc2a-4b1c-b9b6-1bd3cfa7a442",
+      "name": "Read Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        -80
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "5bd42c9d-17b5-42b7-bb45-2aefba6e9c6a",
+      "name": "Done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'FOX_DEFAULT_WORKSPACE_ID or FOX_ANALYTICS_WORKSPACE_ID must be configured' } }}",
+        "options": {
+          "responseCode": 503
+        }
+      },
+      "id": "bb6a2d13-5c74-4fdf-aa9d-5dd91c8b0747",
+      "name": "Not Configured",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Require Analytics Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Analytics Config": {
+      "main": [
+        [
+          {
+            "node": "Analytics Digest Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analytics Digest Envelope": {
+      "main": [
+        [
+          {
+            "node": "Read Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Analytics": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f0b298aa-3d8c-4a0e-b081-5d8a2c78af53",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    "analytics",
+    "digest",
+    "multi-channel",
+    "daily"
+  ]
+}

@@ -1,1 +1,415 @@
-{"name":"13-instagram-comment-trigger","nodes":[{"id":"ig-webhook","type":"n8n-nodes-base.webhook","parameters":{"path":"instagram-comment","responseMode":"lastNode"}},{"id":"escalate","type":"n8n-nodes-base.switch","parameters":{"mode":"rules","rules":[{"value1":"={{ $json.commentType }}","operation":"equals","value2":"negative"},{"value1":"={{ $json.commentType }}","operation":"equals","value2":"question"}]}},{"id":"human","type":"n8n-nodes-base.emailSend","parameters":{"to":"={{ $env.ESCALATION_EMAIL }}","subject":"IG Escalation"}}],"tags":["instagram","meta","escalation"],"notes":"Requires META_PAGE_ACCESS_TOKEN. Stages to workflow 05 if escalation needed."}
+{
+  "name": "FOX Instagram Comment Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-instagram-comments",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3b3ef87a-9640-4e08-b97a-801c0b4d3f49",
+      "name": "Instagram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "96404e08-b97a-801c-0b4d3f493b3e"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "1ae3290d-85dc-480b-82fa-64aa91dac22b",
+              "leftValue": "={{ $env.FOX_N8N_SHARED_SECRET && $json.headers?.['x-fox-n8n-secret'] === $env.FOX_N8N_SHARED_SECRET ? $env.FOX_N8N_SHARED_SECRET : 'NO' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "079025ac-41ca-a9e3-af1ceacd536d",
+      "name": "Verify FOX Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "6ca629e7-0e08-49f9-aa66-b264014791ec",
+              "leftValue": "={{ $env.META_PAGE_ACCESS_TOKEN ? 'configured' : 'NO' }}",
+              "rightValue": "configured",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dd0733f3-1523-48f3-80d4-aef866355cb5",
+      "name": "Require Meta Config",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b712a138-e3f2-4ce5-84b5-11c4a0538ee0",
+              "name": "workflow",
+              "value": "FOX Instagram Comment Trigger",
+              "type": "string"
+            },
+            {
+              "id": "69600046-d200-4f19-bc12-a6c9710f7120",
+              "name": "event",
+              "value": "instagram.comment.received",
+              "type": "string"
+            },
+            {
+              "id": "9e8f4c4b-4cc9-434c-b067-f39d6cee5970",
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c5603e96-d37d-444f-8565-abe795e5f5b9",
+              "name": "channel",
+              "value": "instagram",
+              "type": "string"
+            },
+            {
+              "id": "db730098-453d-49d0-99eb-23425e814393",
+              "name": "message",
+              "value": "={{ $json.body?.message || $json.entry?.[0]?.changes?.[0]?.value?.text || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "effcd795-532a-4128-9991-2c31a892d611",
+              "name": "sessionId",
+              "value": "={{ $json.body?.sessionId || $json.sessionId || $json.body?.object_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "22031adb-2a31-465d-4480-a5529be3a02a",
+              "name": "customerId",
+              "value": "={{ $json.body?.customerId || $json.customerId || $json.body?.from || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "7c9f4285-b182-4f2c-999f-64b02a821c63",
+              "name": "commentType",
+              "value": "={{ ($json.body?.commentType || $json.commentType || 'generic').toLowerCase() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b7467210-9e17-41d8-8478-c267d7f2b93a",
+      "name": "Instagram Comment Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "a81f4760-3b17-41f4-b062-a02177e739aa",
+              "leftValue": "={{ $json.commentType }}",
+              "rightValue": "negative",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "bcd300aa-05a3-4a59-8c76-62b8bd0fa24f",
+              "leftValue": "={{ $json.commentType }}",
+              "rightValue": "question",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "e0b115cd-ed4c-4f0d-8b3f-469808160bf4",
+      "name": "Escalation Needed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/automation/agent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: 'complaints-suggestions', message: $json.message, channel: 'instagram', sessionId: $json.sessionId, customerId: $json.customerId }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "408fd87c-3926-4cbf-be1e-843066d61f23",
+      "name": "FOX Complaints Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/automation/agent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: 'support', message: $json.message, channel: 'instagram', sessionId: $json.sessionId, customerId: $json.customerId }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "6d030b59-2710-4d81-9b64-5b4033a0f9d9",
+      "name": "FOX Instagram Agent Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, workflow: 'instagram-comment-trigger', reply: $json.reply } }}",
+        "options": {}
+      },
+      "id": "3f5a12d7-2cc8-4d9a-89b1-8e01a3e3ed16",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'forbidden' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "71eee95f-4a14-42f7-bb72-88b06d546142",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'META_PAGE_ACCESS_TOKEN must be configured' } }}",
+        "options": {
+          "responseCode": 503
+        }
+      },
+      "id": "2e7c0b5a-1f51-4fc0-aa30-cbbd5a4be079",
+      "name": "Not Configured",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        200
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Instagram Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX Secret": {
+      "main": [
+        [
+          {
+            "node": "Require Meta Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Meta Config": {
+      "main": [
+        [
+          {
+            "node": "Instagram Comment Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instagram Comment Envelope": {
+      "main": [
+        [
+          {
+            "node": "Escalation Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Needed": {
+      "main": [
+        [
+          {
+            "node": "FOX Complaints Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FOX Instagram Agent Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Complaints Escalation": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Instagram Agent Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "7dbe70c4-8b94-4a0e-81b5-9d7375b3cde3",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    "instagram",
+    "meta",
+    "escalation"
+  ]
+}

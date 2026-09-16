@@ -79,20 +79,41 @@ test("every staged n8n webhook rejects missing or empty shared-secret headers", 
   );
   const workflows = readdirSync(workflowsDirectory)
     .filter((name) => name.endsWith(".json"));
-  assert.equal(workflows.length, 11);
+  assert.equal(workflows.length, 16);
 
   for (const workflow of workflows) {
     const source = readFileSync(new URL(workflow, workflowsDirectory), "utf8");
+
+    // Never fail open: the expected secret must not be substituted when the
+    // header is absent or empty.
     assert.doesNotMatch(
       source,
       /headers\?\.\['x-fox-n8n-secret'\]\s*\|\|\s*\$env\.FOX_N8N_SHARED_SECRET/,
       `${workflow} must not substitute the expected secret when the header is absent`,
     );
-    assert.match(source, /:\s*'NO'/);
-    assert.match(
-      source,
-      /\$env\.FOX_N8N_SHARED_SECRET\s*&&\s*\$json\.headers/,
-    );
+
+    const hasInboundWebhook = source.includes("n8n-nodes-base.webhook");
+
+    // A webhook may be secured at the n8n boundary via the shared HTTP Header
+    // Auth credential (the FOX unified router) instead of an inline check.
+    const credentialSecuredWebhook = hasInboundWebhook &&
+      /"httpHeaderAuth":\s*\{\s*"id":\s*"[^"]+",\s*"name":\s*"X-FOX-N8N-Secret"/.test(source);
+
+    if (!hasInboundWebhook) {
+      // Schedule-triggered outbound workflows (e.g. the daily analytics
+      // digest) receive no inbound headers, so the header check does not
+      // apply — but they must still authenticate outbound calls.
+      assert.match(source, /X-FOX-N8N-Secret/);
+      continue;
+    }
+
+    if (!credentialSecuredWebhook) {
+      assert.match(source, /:\s*'NO'/);
+      assert.match(
+        source,
+        /\$env\.FOX_N8N_SHARED_SECRET\s*&&\s*\$json\.headers/,
+      );
+    }
   }
 });
 

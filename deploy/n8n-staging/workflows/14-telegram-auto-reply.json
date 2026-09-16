@@ -1,1 +1,310 @@
-{"name":"14-telegram-auto-reply","nodes":[{"id":"tg-webhook","type":"n8n-nodes-base.webhook","parameters":{"path":"telegram-auto-reply","responseMode":"lastNode"}},{"id":"agent-router","type":"n8n-nodes-base.function","parameters":{"functionCode":"// Call agent router 00-fox-unified-agent-router; decide reply strategy."}},{"id":"telegram-send","type":"n8n-nodes-base.httpRequest","parameters":{"method":"POST","url":"=$env.TELEGRAM_API_URL","authentication":"genericCredentialType","sendBody":true}}],"tags":["telegram","auto-reply","ai","router"],"notes":"Requires TELEGRAM_BOT_TOKEN (reference from .env.staging/credentials, never embedded)."}
+{
+  "name": "FOX Telegram Auto-Reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-telegram-auto-reply",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "844e8e03-d367-4011-8d72-eab6dc79d545",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d3674011-8d72-eab6-dc79d545844e"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "0845e8e0-4d98-49f9-bc12-a6c9710f7120",
+              "leftValue": "={{ $env.FOX_N8N_SHARED_SECRET && $json.headers?.['x-fox-n8n-secret'] === $env.FOX_N8N_SHARED_SECRET ? $env.FOX_N8N_SHARED_SECRET : 'NO' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b7467210-9e17-41d8-8478-c267d7f2b93a",
+      "name": "Verify FOX Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "3f5a12d7-2cc8-4d9a-89b1-8e01a3e3ed16",
+              "leftValue": "={{ $env.TELEGRAM_BOT_TOKEN ? 'configured' : 'NO' }}",
+              "rightValue": "configured",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "71eee95f-4a14-42f7-bb72-88b06d546142",
+      "name": "Require Telegram Config",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2e7c0b5a-1f51-4fc0-aa30-cbbd5a4be079",
+              "name": "workflow",
+              "value": "FOX Telegram Auto-Reply",
+              "type": "string"
+            },
+            {
+              "id": "408fd87c-3926-4cbf-be1e-843066d61f23",
+              "name": "event",
+              "value": "channel.message.received",
+              "type": "string"
+            },
+            {
+              "id": "6d030b59-2710-4d81-9b64-5b4033a0f9d9",
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a81f4760-3b17-41f4-b062-a02177e739aa",
+              "name": "channel",
+              "value": "telegram",
+              "type": "string"
+            },
+            {
+              "id": "bcd300aa-05a3-4a59-8c76-62b8bd0fa24f",
+              "name": "message",
+              "value": "={{ $json.body?.message || $json.body?.message?.text || $json.message?.text || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "e0b115cd-ed4c-4f0d-8b3f-469808160bf4",
+              "name": "sessionId",
+              "value": "={{ $json.body?.sessionId || $json.sessionId || $json.body?.message?.chat?.id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2e46b0af-38ed-4d4a-a3bb-00c36b6f6521",
+              "name": "customerId",
+              "value": "={{ $json.body?.customerId || $json.customerId || $json.body?.message?.from?.id || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f9c739a4-5748-4e4f-9f32-98f6e14d88d6",
+      "name": "Telegram Event Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/automation/agent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: 'support', message: $json.message, channel: 'telegram', sessionId: $json.sessionId, customerId: $json.customerId }) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "c1b6a1d9-73bc-47ad-8dfc-98450ffa9682",
+      "name": "FOX Telegram Agent Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, workflow: 'telegram-auto-reply', reply: $json.reply } }}",
+        "options": {}
+      },
+      "id": "4a06c9a3-7b39-44ee-9bd0-e64aa73a74cf",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'forbidden' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "b7829d33-5cd3-4d8e-819b-a4c7a7d4b98f",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'TELEGRAM_BOT_TOKEN must be configured' } }}",
+        "options": {
+          "responseCode": 503
+        }
+      },
+      "id": "c1b5b3c2-84d4-4d2f-9902-a6327f0d5d11",
+      "name": "Not Configured",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        200
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX Secret": {
+      "main": [
+        [
+          {
+            "node": "Require Telegram Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Telegram Config": {
+      "main": [
+        [
+          {
+            "node": "Telegram Event Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Event Envelope": {
+      "main": [
+        [
+          {
+            "node": "FOX Telegram Agent Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Telegram Agent Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "31023fca-9e88-42af-9dbd-24180b0ec40f",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    "telegram",
+    "auto-reply",
+    "ai",
+    "router"
+  ]
+}

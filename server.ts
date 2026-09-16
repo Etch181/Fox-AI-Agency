@@ -9618,6 +9618,119 @@ app.post(
         }
       } catch (activityError) { console.warn("[FOX Agent Activity] success logging skipped", activityError); }
 
+      // -------------------------------------------------------
+      // UNIFIED INBOX + CRM PERSISTENCE
+      // Persist ONLY fresh inbound channel events arriving from
+      // n8n (`event` is set by wf11-15). Native handlers (Telegram,
+      // Messenger, Instagram) persist before dispatching to n8n and
+      // reach this endpoint with no `event`; gating on `event` keeps
+      // those messages from being appended twice.
+      // -------------------------------------------------------
+      let inboxConversationId: string | null = null;
+      let inboxCrmLeadId: string | null = null;
+      if (String(body.event || "").trim()) {
+        const externalChatId = String(
+          body.customerId || body.externalChatId || body.phone || body.username || sessionId
+        ).trim();
+        const customerName = String(
+          body.customerName || body.firstName || body.name || body.chatName || "Customer"
+        ).trim().slice(0, 120);
+        const customerPhone = String(body.phone || body.customerPhone || "").trim();
+
+        try {
+          const conversation = await conversationService.getOrCreateConversation(
+            String(trustedWorkspace.id),
+            {
+              sessionId,
+              channel: channel as any,
+              externalChatId,
+              customerName,
+              customerPhone: customerPhone || undefined,
+            }
+          );
+          inboxConversationId = conversation.id;
+
+          try {
+            const crmResult = await workspaceCrmService.upsertChannelCustomer(
+              String(trustedWorkspace.id),
+              {
+                channel: channel as any,
+                externalCustomerId: externalChatId,
+                name: customerName,
+                phone: customerPhone || undefined,
+                sessionId,
+                conversationId: conversation.id,
+              }
+            );
+            inboxCrmLeadId = String(crmResult.lead.id);
+            await adminDb
+              .collection("workspaces")
+              .doc(String(trustedWorkspace.id))
+              .collection("conversations")
+              .doc(conversation.id)
+              .set({ crmLeadId: inboxCrmLeadId, updatedAt: new Date().toISOString() }, { merge: true });
+            console.log(`👤 [FOX n8n CRM Sync] Workspace=${trustedWorkspace.id} | Lead=${inboxCrmLeadId} | Created=${crmResult.created}`);
+          } catch (crmError: any) {
+            console.warn(`⚠️ [FOX n8n CRM Sync] skipped | Workspace=${trustedWorkspace.id}`, crmError?.message || crmError);
+          }
+
+          // Idempotency guard: a native handler may have persisted the same
+          // customer message before dispatching into n8n (e.g. router v3).
+          // Skip appending when an identical recent customer message exists.
+          const recent = await conversationService.getRecentMessages(
+            String(trustedWorkspace.id),
+            conversation.id,
+            20
+          );
+          const duplicateCustomerMessage = recent.some(
+            (m: any) =>
+              m.sender === "customer" &&
+              String(m.text || "").trim() === message
+          );
+
+          if (!duplicateCustomerMessage) {
+            await conversationService.appendMessage(
+              String(trustedWorkspace.id),
+              conversation.id,
+              {
+                sessionId,
+                channel: channel as any,
+                sender: "customer",
+                text: message,
+              }
+            );
+          }
+
+          const aiResponse = String(result.response || result.aiResponse || "").trim();
+          if (aiResponse) {
+            await conversationService.appendMessage(
+              String(trustedWorkspace.id),
+              conversation.id,
+              {
+                sessionId,
+                channel: channel as any,
+                sender: "ai",
+                text: aiResponse,
+                agentRole: agent,
+              }
+            );
+          }
+
+          if (Boolean(result.handoffRequired)) {
+            await markConversationHumanNeeded(
+              String(trustedWorkspace.id),
+              conversation.id,
+              String(result.handoffReason || "AI could not safely complete the request")
+            );
+          }
+        } catch (persistError: any) {
+          console.error(
+            `⚠️ [FOX n8n Inbox Persistence] failed | Workspace=${trustedWorkspace.id}`,
+            persistError?.message || persistError
+          );
+        }
+      }
+
       return res.json({
         success: true,
         agent,
@@ -9629,6 +9742,9 @@ app.post(
         handoffRequired: Boolean(result.handoffRequired),
         handoffReason: result.handoffReason,
         routing: { selectedAgent: agent, reason: routed.reason, enabledAgents: routing.enabledAgents },
+        inbox: inboxConversationId
+          ? { conversationId: inboxConversationId, channel, crmLeadId: inboxCrmLeadId }
+          : undefined,
       });
     } catch (error: any) {
       console.error("[FOX n8n Agent Dispatch Error]", error?.message || error);
