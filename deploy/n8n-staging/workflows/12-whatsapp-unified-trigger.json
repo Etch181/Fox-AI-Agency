@@ -1,1 +1,310 @@
-{"name":"12-whatsapp-unified-trigger","nodes":[{"id":"whatsapp-webhook","type":"n8n-nodes-base.webhook","parameters":{"path":"whatsapp-events","responseMode":"lastNode"}},{"id":"verify","type":"n8n-nodes-base.function","parameters":{"functionCode":"// Verify Meta webhook signature using $env.WHATSAPP_APP_SECRET; fail-closed if missing."}},{"id":"crm-sync","type":"n8n-nodes-base.firestore","parameters":{"operation":"upsert","collection":"crm_leads"}},{"id":"auto-reply","type":"n8n-nodes-base.httpRequest","parameters":{"method":"POST","url":"=$env.FOX_N8N_URL","sendBody":true,"authentication":"genericCredentialType"}}],"tags":["whatsapp","meta","unified","crm"],"notes":"Requires WHATSAPP_APP_SECRET and phoneNumberId. No secrets in file."}
+{
+  "name": "FOX WhatsApp Unified Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-whatsapp-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "844e8e03-d367-4011-8d72-eab6dc79d545",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d3674011-8d72-eab6-dc79d545844e"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "6ca629e7-0e08-49f9-aa66-b264014791ec",
+              "leftValue": "={{ $env.FOX_N8N_SHARED_SECRET && $json.headers?.['x-fox-n8n-secret'] === $env.FOX_N8N_SHARED_SECRET ? $env.FOX_N8N_SHARED_SECRET : 'NO' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "079025ac-08a0-4d98-a56a-f536bd7ceaf2",
+      "name": "Verify FOX Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ee6dbbd0-ef02-4239-accf-f2b7664a79bf",
+              "leftValue": "={{ $env.WHATSAPP_APP_SECRET && $env.WHATSAPP_PHONE_NUMBER_ID ? 'configured' : 'NO' }}",
+              "rightValue": "configured",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "066ee880-1e3d-41ca-a9e3-af1ceacd536d",
+      "name": "Require WhatsApp Config",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b712a138-e3f2-4ce5-84b5-11c4a0538ee0",
+              "name": "workflow",
+              "value": "FOX WhatsApp Unified Trigger",
+              "type": "string"
+            },
+            {
+              "id": "69600046-d200-4f19-bc12-a6c9710f7120",
+              "name": "event",
+              "value": "channel.message.received",
+              "type": "string"
+            },
+            {
+              "id": "3b3ef87a-9640-4e08-b97a-801c0b4d3f49",
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "db730098-453d-49d0-99eb-23425e814393",
+              "name": "channel",
+              "value": "whatsapp",
+              "type": "string"
+            },
+            {
+              "id": "1ae3290d-85dc-480b-82fa-64aa91dac22b",
+              "name": "message",
+              "value": "={{ $json.body?.message || $json.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c5603e96-d37d-444f-8565-abe795e5f5b9",
+              "name": "sessionId",
+              "value": "={{ $json.body?.sessionId || $json.sessionId || $json.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "effcd795-532a-4128-9991-2c31a892d611",
+              "name": "customerId",
+              "value": "={{ $json.body?.customerId || $json.customerId || $json.body?.from || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "079025ac-aa66-49f9-8d72-eab6dc79d545",
+      "name": "WhatsApp Event Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/automation/agent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: 'support', message: $json.message, channel: 'whatsapp', sessionId: $json.sessionId, customerId: $json.customerId }) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "9e8f4c4b-4cc9-434c-b067-f39d6cee5970",
+      "name": "FOX WhatsApp Agent Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, workflow: 'whatsapp-unified-trigger', reply: $json.reply } }}",
+        "options": {}
+      },
+      "id": "dd0733f3-1523-48f3-80d4-aef866355cb5",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'forbidden' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "0845e8e0-4d98-41ca-86fc-1a5ae260caf2",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'WHATSAPP_APP_SECRET and WHATSAPP_PHONE_NUMBER_ID must be configured' } }}",
+        "options": {
+          "responseCode": 503
+        }
+      },
+      "id": "ee6dbbd0-ef02-4239-accf-f2b7664a79bf",
+      "name": "Not Configured",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        200
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX Secret": {
+      "main": [
+        [
+          {
+            "node": "Require WhatsApp Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require WhatsApp Config": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Event Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Event Envelope": {
+      "main": [
+        [
+          {
+            "node": "FOX WhatsApp Agent Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX WhatsApp Agent Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "9c50f633-3b3e-4a7b-8d20-faa0e8871c22",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    "whatsapp",
+    "meta",
+    "unified",
+    "crm"
+  ]
+}

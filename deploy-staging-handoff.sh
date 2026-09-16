@@ -272,9 +272,9 @@ workflows = sorted(
     (source / "deploy/n8n-staging/workflows").glob("*.json")
 )
 
-if len(workflows) != 11:
+if len(workflows) != 16:
     raise SystemExit(
-        f"Expected 11 n8n workflows, found {len(workflows)}"
+        f"Expected 16 n8n workflows, found {len(workflows)}"
     )
 
 values = {}
@@ -334,7 +334,7 @@ if not node_stages or any(not stage.startswith("24-") and stage != "24" for stag
 print("Source fix markers: PASS")
 print("Staging environment identity: PASS")
 print("Node 24 Docker build requirement: PASS")
-print("n8n workflow count: 10")
+print("n8n workflow count: 16")
 PY
 
 printf '\n=== 3. VERIFIED IMMUTABLE RELEASE SNAPSHOT ===\n'

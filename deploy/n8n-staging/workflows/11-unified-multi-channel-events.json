@@ -1,11 +1,311 @@
 {
-  "name": "11-unified-multi-channel-events",
+  "name": "FOX Unified Multi-Channel Events",
   "nodes": [
-    {"id":"webhook","type":"n8n-nodes-base.webhook","parameters":{"path":"unified-events","responseMode":"lastNode"}},
-    {"id":"route","type":"n8n-nodes-base.switch","parameters":{"mode":"rules","dataType":"string","rules":[{"value1":"={{ $json.channel }}","operation":"equals","value2":"whatsapp"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"messenger"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"telegram"},{"value1":"={{ $json.channel }}","operation":"equals","value2":"instagram"}]}},
-    {"id":"crm","type":"n8n-nodes-base.firestore","parameters":{"operation":"upsert","collection":"leads","options":{}}},
-    {"id":"notify","type":"n8n-nodes-base.httpRequest","parameters":{"method":"POST","url":"=$env.N8N_WEBHOOK_URL","authentication":"basicAuth","sendBody":true}
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fox-unified-channel-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "83f45239-d4d2-4fea-a594-28842060c9c5",
+      "name": "Unified Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d4d2e98d-63ef-c5ab-47b3-acbf35cc57d4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "9d65c250-13f2-4082-b079-f68c343c9573",
+              "leftValue": "={{ $env.FOX_N8N_SHARED_SECRET && $json.headers?.['x-fox-n8n-secret'] === $env.FOX_N8N_SHARED_SECRET ? $env.FOX_N8N_SHARED_SECRET : 'NO' }}",
+              "rightValue": "={{ $env.FOX_N8N_SHARED_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5f97b14c-54b5-4da6-90a0-e7708e078131",
+      "name": "Verify FOX Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c999355a-883a-4eab-aa19-c6d1bcb21501",
+              "leftValue": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7bd8d3df-653f-4125-9d61-0b17dae2a8ea",
+      "name": "Require Workspace",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "556a754d-b79c-4ffe-9686-da9ac230bf01",
+              "name": "workflow",
+              "value": "FOX Unified Multi-Channel Events",
+              "type": "string"
+            },
+            {
+              "id": "bcc24a10-86b8-4708-93a8-a4331dfa9a36",
+              "name": "event",
+              "value": "channel.message.received",
+              "type": "string"
+            },
+            {
+              "id": "a455012b-bf88-48bb-bcaf-853ea2cf462d",
+              "name": "workspaceId",
+              "value": "={{ $json.body?.workspaceId || $json.workspaceId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "e98d63ef-c5ab-47b3-acbf-35cc57d46196",
+              "name": "channel",
+              "value": "={{ $json.body?.channel || $json.channel || 'web' }}",
+              "type": "string"
+            },
+            {
+              "id": "10c4aaea-f3f0-466d-b4a7-bd1652643ce2",
+              "name": "message",
+              "value": "={{ $json.body?.message || $json.message || $json.body?.customerMessage || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "793d2071-07c1-4aaa-b5c3-67807481df22",
+              "name": "sessionId",
+              "value": "={{ $json.body?.sessionId || $json.sessionId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "9d4c3c0a-25e8-4f52-b970-47a0e0161cab",
+              "name": "customerId",
+              "value": "={{ $json.body?.customerId || $json.customerId || $json.body?.from?.id || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "90246c2e-19a9-4afd-b903-964e71f758a4",
+      "name": "Tenant Event Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FOX_INTERNAL_BASE_URL || 'http://fox-ai-staging:3000' }}/api/automation/agent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FOX-N8N-Secret",
+              "value": "={{ $env.FOX_N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agent: 'support', message: $json.message, channel: $json.channel, sessionId: $json.sessionId, customerId: $json.customerId }) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "420fbbb5-659c-4155-a6fd-d9d50f1121b8",
+      "name": "FOX Unified Agent Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, workflow: 'unified-multi-channel-events', reply: $json.reply } }}",
+        "options": {}
+      },
+      "id": "3fc3f2ce-dcde-4724-85e6-643ab3a18502",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'forbidden' } }}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "c267f426-0c22-4aec-86fc-1a5ae260caf2",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: false, error: 'missing workspaceId' } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "effcd795-532a-4128-9991-2c31a892d611",
+      "name": "No Workspace",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        200
+      ]
+    }
   ],
-  "tags":["multi-channel","unified","whatsapp","messenger","telegram","instagram"],
-  "notes":"Fail-closed: stops if $env.WHATSAPP_APP_SECRET or $env.META_PAGE_TOKEN missing. Uses workspace secrets only."
+  "pinData": {},
+  "connections": {
+    "Unified Events Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify FOX Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify FOX Secret": {
+      "main": [
+        [
+          {
+            "node": "Require Workspace",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Workspace": {
+      "main": [
+        [
+          {
+            "node": "Tenant Event Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Workspace",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tenant Event Envelope": {
+      "main": [
+        [
+          {
+            "node": "FOX Unified Agent Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FOX Unified Agent Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "6945e57a-21f5-4d4e-8c0e-a0b3f7aa21a1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    "multi-channel",
+    "unified",
+    "whatsapp",
+    "messenger",
+    "telegram",
+    "instagram"
+  ]
 }
