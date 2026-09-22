@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@remotion/cli": "^4.0.526",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
@@ -37,6 +38,7 @@
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
+    "remotion": "^4.0.526",
     "vite": "^6.2.3"
   },
   "devDependencies": {
@@ -44,6 +46,8 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "firebase-tools": "^15.28.1",

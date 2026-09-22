@@ -29,14 +29,10 @@ import {
   HelpCircle,
   Headphones,
   LifeBuoy,
-  ShieldAlert,
-  Activity,
   PackageCheck,
   Award,
-  BarChart2,
   Megaphone,
   MessageCircle,
-  ServerCog,
 } from "lucide-react";
 
 export type { ViewTab } from "../security/appAuthorization";
@@ -256,18 +252,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
             </button>
 
             <button
-              onClick={() => setActiveTab("admin_infrastructure")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-                activeTab === "admin_infrastructure"
-                  ? "bg-orange-600/10 text-orange-500"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <ServerCog className="h-4 w-4 text-indigo-500" />
-              <span>{isAr ? "بنية FOX الذكية" : "FOX AI Infrastructure"}</span>
-            </button>
-
-            <button
               onClick={() => setActiveTab("admin_tickets")}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
                 activeTab === "admin_tickets"
@@ -287,30 +271,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
             </button>
 
             <button
-              onClick={() => setActiveTab("admin_audit_logs")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-                activeTab === "admin_audit_logs"
-                  ? "bg-orange-600/10 text-orange-500"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <ShieldAlert className="h-4 w-4 text-orange-500" />
-              <span>{isAr ? "سجلات المراجعة والأمان" : "Audit & Security Logs"}</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("admin_gemini_status")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-                activeTab === "admin_gemini_status"
-                  ? "bg-orange-600/10 text-orange-500"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <Activity className="h-4 w-4 text-indigo-500 animate-pulse" />
-              <span>{isAr ? "مراقبة نماذج الذكاء الاصطناعي" : "AI Model Monitoring"}</span>
-            </button>
-
-            <button
               onClick={() => setActiveTab("admin_ratings")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
                 activeTab === "admin_ratings"
@@ -322,6 +282,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
               <span>{isAr ? "تقييمات وآراء الوكالة" : "Agency Service Ratings"}</span>
             </button>
 
+            <button
+              onClick={() => setActiveTab("admin_unified_monitor")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
+                activeTab === "admin_unified_monitor"
+                  ? "bg-orange-600/10 text-orange-500"
+                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <MessageSquare className="h-4 w-4 text-violet-500" />
+              <span>{isAr ? "مراقب المحادثات الموحد" : "Unified Monitor"}</span>
+            </button>
+
             {/* Agency-only AI tools */}
             <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800">
               <p className="px-2 pb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
@@ -330,9 +302,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
             </div>
 
             <button
-              onClick={() => setActiveTab("client_marketing_agent")}
+              onClick={() => setActiveTab("admin_agency_marketing")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-                activeTab === "client_marketing_agent"
+                activeTab === "admin_agency_marketing"
                   ? "bg-orange-600/10 text-orange-600 dark:bg-orange-500/20 dark:text-orange-400"
                   : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
               }`}
@@ -342,22 +314,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
                 {isAr
                   ? "تسويق الوكالة والسوشيال ميديا"
                   : "Agency Social Marketing"}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("client_ai_analytics")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-                activeTab === "client_ai_analytics"
-                  ? "bg-blue-600/10 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <BarChart2 className="h-4 w-4 text-blue-500" />
-              <span>
-                {isAr
-                  ? "تحليلات الذكاء الاصطناعي للوكالة"
-                  : "Agency AI Analytics"}
               </span>
             </button>
           </div>
@@ -532,19 +488,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isMob
             <span>{isAr ? "ربط WhatsApp Cloud API" : "WhatsApp Cloud API"}</span>
           </button>
           )}
-
-          <button
-            data-tour="tour-client-live-simulator"
-            onClick={() => setActiveTab("client_live_simulator")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
-              activeTab === "client_live_simulator"
-                ? "bg-orange-600/10 text-orange-500"
-                : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-            }`}
-          >
-            <MessageSquare className="h-4 w-4 text-emerald-500" />
-            <span>{isAr ? "مُحاكي المحادثة المباشرة" : "Live Channel Simulator"}</span>
-          </button>
 
           <button
             onClick={() => setActiveTab("client_subscription")}

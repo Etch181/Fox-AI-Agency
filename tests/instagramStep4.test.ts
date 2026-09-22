@@ -47,7 +47,7 @@ test("missing credentials fail closed", async () => {
 test("duplicate publish prevention via state and bounded retries", async () => {
   // Instagram publish requires enterprise plan; the seeded workspace for
   // this id uses enterprise so entitlement + credentials checks pass.
-  const id = await createSocialPublishRecord('ws-publish-dedup', { platform: 'instagram', content: 'dedup test', mode: 'MANUAL_APPROVAL', state: 'scheduled', scheduledAt: new Date().toISOString() });
+  const id = await createSocialPublishRecord('ws-publish-dedup', { platform: 'instagram', content: 'dedup test', mode: 'AUTO_PUBLISH', state: 'scheduled', scheduledAt: new Date().toISOString() });
 
   // Real publishing must fail closed in tests because no real Meta response exists.
   // The important invariant is that a failed provider call never fabricates a published state.

@@ -2,7 +2,6 @@ import { getWorkspaceSecret, setWorkspaceSecret, deleteWorkspaceSecret } from '.
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from './firebaseAdmin.ts';
 import { canWorkspaceUseFeature, type FoxFeature } from './entitlementService.ts';
-import { GoogleGenAI } from '@google/genai';
 
 export const INSTAGRAM_BUSINESS_ACCOUNT_ID_KEY = 'instagramBusinessAccountId';
 export const INSTAGRAM_ACCESS_TOKEN_KEY = 'instagramAccessToken';
@@ -115,27 +114,29 @@ export async function sendInstagramCommentReply(workspaceId: string, commentId: 
   }
 }
 
-// Helper to generate AI response for Instagram (similar to meta auto reply)
-export async function generateInstagramAIResponse(workspaceId: string, userMessage: string, senderName: string = 'عميل إنستغرام'): Promise<string> {
-  const aiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY : "";
-  const ai = aiKey ? new GoogleGenAI({ apiKey: aiKey }) : null;
-  if (!ai) {
-    return senderName === 'عميل إنستغرام'
-      ? `أهلاً بك! 🌸 نحن في FOX AI Agency. نقدر تواصلكم عبر إنستغرام وسنرد على استفساركم: "${userMessage}" قريباً عبر الرسائل الخاصة.`
-      : `Hello! 🌸 This is FOX AI Agency. We appreciate your Instagram message regarding: "${userMessage}". We'll respond via direct message shortly.`;
-  }
-
+// Instagram uses the same FOX Brain as every other live customer channel.
+export async function generateInstagramAIResponse(
+  workspaceId: string,
+  userMessage: string,
+  senderName: string = 'عميل إنستغرام',
+): Promise<string> {
   try {
-    const prompt = `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على إنستغرام: "${userMessage}". اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`;
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt
+    const { generateTenantBrainResponse } = await import('./foxBrainService.ts');
+    const result = await generateTenantBrainResponse({
+      workspaceId,
+      message: userMessage,
+      channel: 'instagram',
+      sessionId: 'instagram:' + workspaceId + ':' + Date.now(),
+      customPrompt:
+        'You are the FOX live customer-service brain for this tenant. Use tenant data and tools when needed. Never invent prices, availability, appointments, policies, medical claims or completed actions. Match the customer language. Escalate when the answer is not grounded or the customer requests a human.',
     });
-    return response.text || '';
-  } catch (e) {
-    console.warn('[Instagram AI Gen Fallback]:', e);
+    const text = String(result?.response || result?.aiResponse || '').trim();
+    if (!text) throw new Error('EMPTY_BRAIN_RESPONSE');
+    return text;
+  } catch (error: any) {
+    console.warn('[FOX Instagram Brain] safe fallback:', error?.message || error);
     return senderName === 'عميل إنستغرام'
-      ? `أهلاً بك! 🌸 نحن في FOX AI Agency. نقدر تواصلكم عبر إنستغرام. كيف يمكننا مساعدتك اليوم؟ ✨`
-      : `Hello! 🌸 This is FOX AI Agency. Thanks for your Instagram message. How can we help you today? ✨`;
+      ? 'أقدر أساعدك، لكن أحتاج أتأكد من بيانات المنشأة قبل ما أديك إجابة مؤكدة. سيتم تحويل استفسارك لموظف عند الحاجة.'
+      : 'I need to verify the business data before giving you a confirmed answer. A human agent can take over when needed.';
   }
 }

@@ -40,6 +40,37 @@ class EmailService {
     return null;
   }
 
+  public async sendStaffInviteEmail({
+    toEmail,
+    staffName,
+    workspaceName,
+    roleLabel,
+    resetLink,
+  }: {
+    toEmail: string;
+    staffName: string;
+    workspaceName: string;
+    roleLabel: string;
+    resetLink: string;
+  }): Promise<SendOtpResult> {
+    const fromAddress = process.env.SMTP_FROM || '"FOX AI AGENCY 🦊" <noreply@foxaiagency.com>';
+    const mailOptions = {
+      from: fromAddress,
+      to: toEmail,
+      subject: `دعوة للانضمام إلى ${workspaceName} عبر FOX AI AGENCY`,
+      html: `<!doctype html><html lang="ar" dir="rtl"><body style="font-family:Segoe UI,Tahoma,sans-serif;background:#0f172a;color:#e2e8f0;padding:32px"><div style="max-width:620px;margin:auto;background:#111827;border:1px solid #334155;border-radius:20px;padding:32px"><h1 style="color:#fb923c;margin-top:0">FOX AI AGENCY 🦊</h1><p>مرحباً ${staffName}،</p><p>تمت دعوتك للانضمام إلى مساحة <strong>${workspaceName}</strong> بدور <strong>${roleLabel}</strong>.</p><p>اضغط الزر التالي لتعيين كلمة المرور وتفعيل حسابك:</p><p><a href="${resetLink}" style="display:inline-block;background:#f97316;color:#fff;text-decoration:none;padding:12px 20px;border-radius:12px;font-weight:700">تفعيل الحساب</a></p><p style="color:#94a3b8;font-size:13px">الرابط خاص بحسابك ويُستخدم مرة واحدة لإكمال إعداد كلمة المرور.</p></div></body></html>`,
+      text: `مرحباً ${staffName}. تمت دعوتك إلى ${workspaceName} بدور ${roleLabel}. فعّل حسابك من هنا: ${resetLink}`,
+    };
+    const smtpSetup = this.getTransporter();
+    if (!smtpSetup) return { success: false, error: "SMTP_NOT_CONFIGURED", mode: "simulation" };
+    try {
+      const info = await smtpSetup.transporter.sendMail(mailOptions);
+      return { success: true, messageId: info.messageId, mode: "smtp" };
+    } catch (err: any) {
+      return { success: false, error: String(err?.message || "STAFF_INVITE_EMAIL_FAILED").slice(0, 240), mode: "simulation" };
+    }
+  }
+
   public async sendVerificationEmail({
     toEmail,
     ownerName,

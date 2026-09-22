@@ -2,6 +2,7 @@ import { getWorkspaceSecret } from './workspaceSecretVault.ts';
 import type { FoxFeature } from './entitlementService.ts';
 import { canWorkspaceUseFeature, isWorkspaceEntitlementActive } from './entitlementService.ts';
 import { adminDb } from './firebaseAdmin.ts';
+import { appendWorkspaceSheetEvent } from './googleSheetsService.ts';
 import type { Workspace } from '../types.ts';
 
 // Strip undefined values so Firestore (which rejects undefined) is never
@@ -87,6 +88,22 @@ export async function createSocialPublishRecord(
     } as Record<string, unknown>),
   };
   await doc.set(record);
+  const sheetToken = await getWorkspaceSecret(workspaceId, 'googleSheetsAccessToken');
+  const workspaceSnap = await adminDb.collection('workspaces').doc(workspaceId).get();
+  const spreadsheetId = String(workspaceSnap.data()?.crmSpreadsheetId || '').trim();
+  if (sheetToken && spreadsheetId) {
+    void appendWorkspaceSheetEvent(sheetToken, spreadsheetId, 'Marketing', [
+      now,
+      doc.id,
+      record.platform,
+      record.content.slice(0, 500),
+      record.content,
+      record.scheduledAt || '',
+      record.state,
+    ]).catch((sheetError: any) => {
+      console.warn('[FOX Sheets] Marketing sync failed safely:', sheetError?.message || sheetError);
+    });
+  }
   return doc.id;
 }
 

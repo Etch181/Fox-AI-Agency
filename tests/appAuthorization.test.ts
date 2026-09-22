@@ -75,8 +75,7 @@ test("staff allowlist contains operational views and excludes owner and agency c
     "client_knowledge_builder",
     "client_integrations",
     "client_fox_advisor",
-    "client_ai_analytics",
-    "client_marketing_agent",
+    "admin_agency_marketing",
   ] as const) {
     assert.equal(allowed.includes(privilegedView), false, privilegedView);
   }
@@ -96,7 +95,7 @@ test("restored navigation is re-authorized rather than trusted", () => {
 
   assert.equal(resolveAuthorizedView("staff", restoredOwnerView), roleSafeDefaultView("staff"));
   assert.equal(resolveAuthorizedView("client_owner", restoredAdminView), roleSafeDefaultView("client_owner"));
-  assert.equal(resolveAuthorizedView("super_admin", restoredAdminView), "admin_audit_logs");
+  assert.equal(resolveAuthorizedView("super_admin", restoredAdminView), roleSafeDefaultView("super_admin"));
 });
 
 test("known allowed views remain available to their intended roles", () => {
@@ -125,6 +124,7 @@ test("public starter provisioning is a trusted transactional server route", () =
   assert.match(route, /registrationClaimId\("email"/);
   assert.match(route, /registrationClaimId\("phone"/);
   assert.match(route, /trialClaims/);
-  assert.match(route, /planId:\s*"starter"/);
+  assert.match(route, /const planId\s*=\s*String\(activation\.planId\)/);
+  assert.match(route, /\[\"business\", \"enterprise\"\]/);
   assert.doesNotMatch(route, /req\.body\?\.planId/);
 });

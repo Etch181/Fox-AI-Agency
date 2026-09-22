@@ -15,11 +15,10 @@ export const ALL_VIEWS = [
   "admin_telegram",
   "admin_n8n",
   "admin_agents",
-  "admin_infrastructure",
   "admin_tickets",
-  "admin_audit_logs",
-  "admin_gemini_status",
   "admin_ratings",
+  "admin_unified_monitor",
+  "admin_agency_marketing",
   "client_dashboard",
   "client_crm",
   "client_industry_module",
@@ -28,7 +27,6 @@ export const ALL_VIEWS = [
   "client_ai_settings",
   "client_telegram",
   "client_whatsapp",
-  "client_live_simulator",
   "client_subscription",
   "client_staff",
   "client_tickets",
@@ -39,8 +37,6 @@ export const ALL_VIEWS = [
   "client_knowledge_builder",
   "client_integrations",
   "client_fox_advisor",
-  "client_ai_analytics",
-  "client_marketing_agent",
   "agent_registry",
 ] as const;
 
@@ -49,9 +45,7 @@ export type ViewTab = (typeof ALL_VIEWS)[number];
 const CLIENT_OWNER_VIEWS = ALL_VIEWS.filter(
   (view): view is ViewTab =>
     view === "agent_registry" ||
-    (view.startsWith("client_") &&
-      view !== "client_ai_analytics" &&
-      view !== "client_marketing_agent"),
+    view.startsWith("client_"),
 );
 
 const STAFF_VIEWS = [

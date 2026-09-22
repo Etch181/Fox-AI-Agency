@@ -97,29 +97,11 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
           label: isAr ? "مركز الوكلاء الحي" : "Live Agent Center",
           icon: Activity,
         };
-      case "admin_infrastructure":
-        return {
-          parentCategory: isAr ? "إدارة النظام" : "System Control",
-          label: isAr ? "بنية FOX الذكية" : "FOX AI Infrastructure",
-          icon: ShieldCheck,
-        };
       case "admin_tickets":
         return {
           parentCategory: isAr ? "إدارة النظام" : "System Control",
           label: isAr ? "تذاكر الدعم الفني" : "Support Helpdesk",
           icon: HelpCircle,
-        };
-      case "admin_audit_logs":
-        return {
-          parentCategory: isAr ? "إدارة النظام" : "System Control",
-          label: isAr ? "سجلات المراجعة والأمان" : "Audit & Security Logs",
-          icon: ShieldCheck,
-        };
-      case "admin_gemini_status":
-        return {
-          parentCategory: isAr ? "إدارة النظام" : "System Control",
-          label: isAr ? "مراقبة نماذج الذكاء الاصطناعي" : "AI Model Monitoring",
-          icon: Activity,
         };
 
       // Client Workspace Tabs
@@ -180,12 +162,6 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
           parentCategory: isAr ? "القنوات" : "Channels",
           label: isAr ? "ربط قناة تليجرام" : "Telegram Bot Integration",
           icon: Send,
-        };
-      case "client_live_simulator":
-        return {
-          parentCategory: isAr ? "الاختبار" : "Sandbox",
-          label: isAr ? "مُحاكي المحادثات المباشر" : "Live AI Chat Simulator",
-          icon: MessageSquare,
         };
       case "client_subscription":
         return {

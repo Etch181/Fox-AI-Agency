@@ -1,6 +1,8 @@
 import { adminDb } from "./firebaseAdmin.ts";
 import { scheduleReminder } from "./appointmentReminderService.ts";
 import { canWorkspaceUseFeature, isWorkspaceEntitlementActive } from "./entitlementService.ts";
+import { getWorkspaceSecret } from "./workspaceSecretVault.ts";
+import { appendWorkspaceSheetEvent, createCRMSpreadsheet } from "./googleSheetsService.ts";
 import {
   formatDateKeyInTimeZone,
   isBusinessDateTimeInPast,
@@ -191,6 +193,39 @@ async function syncRootAppointmentCompatibility(
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
+export async function syncTenantSheetEvent(
+  workspaceId: string,
+  sheetName: string,
+  values: unknown[],
+) {
+  try {
+    const workspaceRef = adminDb.collection("workspaces").doc(workspaceId);
+    const workspaceSnap = await workspaceRef.get();
+    const workspace: any = workspaceSnap.exists ? workspaceSnap.data() : null;
+    const accessToken = await getWorkspaceSecret(workspaceId, "googleSheetsAccessToken");
+    if (!accessToken) return;
+
+    let spreadsheetId = String(workspace?.crmSpreadsheetId || "").trim();
+
+    // After OAuth is authorized, provision a dedicated spreadsheet for this tenant
+    // automatically on first business event. Never use a shared tenant sheet.
+    if (!spreadsheetId) {
+      spreadsheetId = String(
+        await createCRMSpreadsheet(accessToken, String(workspace?.name || ("FOX CRM - " + workspaceId))),
+      ).trim();
+      await workspaceRef.set({
+        crmSpreadsheetId: spreadsheetId,
+        googleSheetsConnectedAt: workspace?.googleSheetsConnectedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    }
+
+    await appendWorkspaceSheetEvent(accessToken, spreadsheetId, sheetName, values);
+  } catch (error: any) {
+    console.warn("[FOX Sheets] Tenant sync failed safely:", error?.message || error);
+  }
+}
+
 const normalizePhone = (phone: string) => {
   let digits = String(phone || "").replace(/\D/g, "");
 
@@ -203,6 +238,7 @@ const normalizePhone = (phone: string) => {
 };
 
 export const workspaceDataService = {
+  syncTenantSheetEvent,
   async createAppointment(
     workspaceId: string,
     data: {
@@ -313,6 +349,16 @@ export const workspaceDataService = {
     // Legacy root mirror is compatibility-only. The nested transaction above is
     // authoritative and must remain successful if this mirror is unavailable.
     await syncRootAppointmentCompatibility(id, appointment, "set");
+    void syncTenantSheetEvent(workspaceId, "Reservations", [
+      appointment.createdAt,
+      appointment.id,
+      appointment.date,
+      appointment.time,
+      appointment.customerName,
+      appointment.phone,
+      appointment.channel,
+      appointment.status,
+    ]);
 
     // Business/Enterprise tenants receive real scheduled reminders.
     // Scheduling is best-effort and never invalidates a successful booking.
@@ -816,6 +862,16 @@ export const workspaceDataService = {
 
     // Root compatibility used by the current dashboard.
     await syncRootCrmLeadCompatibility(id, lead);
+    void syncTenantSheetEvent(workspaceId, "Leads", [
+      lead.createdAt,
+      lead.id,
+      lead.name,
+      lead.phone,
+      "",
+      lead.status,
+      "",
+      lead.channel,
+    ]);
 
     return lead;
   },
@@ -982,6 +1038,47 @@ export const workspaceDataService = {
       );
   },
 
+  async recordSale(
+    workspaceId: string,
+    data: {
+      itemName: string;
+      price: number;
+      customerName?: string;
+      customerPhone?: string;
+      channel?: string;
+      sessionId?: string;
+    },
+  ) {
+    const id = makeId("sale");
+    const now = new Date().toISOString();
+    const sale = sanitizeForFirestore({
+      id,
+      workspaceId,
+      itemName: String(data.itemName || "").trim(),
+      price: Number(data.price || 0),
+      customerName: String(data.customerName || "").trim(),
+      customerPhone: String(data.customerPhone || "").trim(),
+      channel: String(data.channel || "ai"),
+      sessionId: String(data.sessionId || ""),
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await setDoc(doc("workspaces", workspaceId, "orders", id), sale);
+    void syncTenantSheetEvent(workspaceId, "Orders", [
+      now,
+      id,
+      sale.customerName,
+      sale.customerPhone,
+      sale.itemName,
+      sale.price,
+      sale.status,
+    ]);
+
+    return sale;
+  },
+
   async saveConversationEvent(
     workspaceId: string,
     sessionId: string,
@@ -1009,6 +1106,15 @@ export const workspaceDataService = {
       doc( "workspaces", workspaceId, "conversations", id),
       event
     );
+    void syncTenantSheetEvent(workspaceId, "Conversations", [
+      event.createdAt,
+      event.id,
+      event.channel,
+      event.sessionId,
+      event.sender,
+      event.agentRole || "",
+      event.text,
+    ]);
 
     return event;
   },

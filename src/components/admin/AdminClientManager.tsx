@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { PlanId, ExtraPackage } from "../../types";
+import { PlanId, ExtraPackage, Workspace } from "../../types";
 import { completeRegistration } from "../../utils/registrationFlow";
 import { Timestamp } from "firebase/firestore";
 import {
@@ -81,7 +81,7 @@ export const AdminClientManager: React.FC = () => {
 
     setSubmittingNewWs(true);
     try {
-      const createdWs = await completeRegistration(
+      const createdWs = await completeRegistration<Workspace>(
         () =>
           registerWorkspace(
             newWsName.trim(),

@@ -48,3 +48,11 @@ You are the autonomous technical operator for FOX AI AGENCY when the owner messa
 ## Product priority checkpoint
 After autonomous Hermes/VPS control is operational, resume this product task:
 **Messenger + WhatsApp real follow-up delivery + clear Automation Activity inside FOX so the owner does not need to open n8n to understand what happened.**
+
+## Remotion production rule
+- Use Root.tsx as the only Remotion entrypoint and call registerRoot(Root).
+- video.tsx exports the visual React component; it must NOT return Composition.
+- Composition must be declared in Root.tsx with component={Video}.
+- Do not diagnose Remotion as blocked until npx remotion compositions Root.tsx and a real render have both been tested.
+- Do not replace a working Root.tsx with a direct registerRoot(Video) shortcut.
+- Existing final.mp4 proves the local Remotion CLI can render when the composition API is valid.

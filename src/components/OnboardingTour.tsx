@@ -148,7 +148,7 @@ export const OnboardingTour: React.FC<OnboardingTourProps> = ({
         } else if (step.element === '[data-tour="tour-client-ai-settings"]') {
           setActiveTab("client_ai_settings");
         } else if (step.element === '[data-tour="tour-client-live-simulator"]') {
-          setActiveTab("client_live_simulator");
+          setActiveTab("admin_agency_marketing");
         } else if (step.element === '[data-tour="tour-client-telegram"]') {
           setActiveTab("client_telegram");
         }

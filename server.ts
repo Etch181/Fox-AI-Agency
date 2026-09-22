@@ -69,8 +69,10 @@ import { TrialLimitManager } from "./src/services/TrialLimitManager";
 import { metaStagingFatalDecision } from "./src/utils/bootDecision";
 import { printEnvValidation } from "./src/utils/envValidation";
 import { instagramIntegrationRouter } from "./src/services/instagramIntegrationRouter";
-import { getMarketingAutomationStatus, getOrCreateStrategy, setStrategy, createCalendarEntry, buildMediaPlan, createMediaJob, getMediaJob } from "./src/services/marketingEngineService";
+import { getMarketingAutomationStatus, getOrCreateStrategy, setStrategy, createCalendarEntry, buildMediaPlan, createMediaJob, getMediaJob, analyzeBestPublishTime } from "./src/services/marketingEngineService";
+import { ensureCRMSpreadsheetStructure } from "./src/services/googleSheetsService";
 import { createSocialPublishRecord, transitionRecordState, processScheduledPost, runDueMarketingPublishing } from "./src/services/socialPublishingService";
+import { suggestAgencyTopics, generateAgencyPost, recommendAgencyPublishTime, saveAgencyPost, listAgencyPosts } from "./src/services/agencyMarketingService";
 import { resolveAuthoritativeUserRole } from "./src/security/appAuthorization";
 import {
   normalizeRegistrationEmail,
@@ -364,6 +366,377 @@ function getGeminiClient() {
 // API ROUTES
 // ==========================================
 
+const STAFF_ROLE_PERMISSIONS: Record<string, string[]> = {
+  receptionist: ["inbox", "appointments", "complaints"],
+  appointment_manager: ["inbox", "appointments", "crm"],
+  sales: ["inbox", "crm", "promotions", "orders"],
+  support: ["inbox", "complaints", "tickets"],
+  manager: ["inbox", "appointments", "complaints", "crm", "promotions", "orders", "tickets", "marketing"],
+};
+
+const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
+  receptionist: { ar: "الاستقبال", en: "Receptionist" },
+  appointment_manager: { ar: "مسؤول الحجوزات", en: "Appointment Manager" },
+  sales: { ar: "المبيعات", en: "Sales" },
+  support: { ar: "خدمة العملاء", en: "Customer Support" },
+  manager: { ar: "مدير المنشأة", en: "Workspace Manager" },
+};
+
+function normalizeStaffRole(value: unknown): string {
+  const role = String(value || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(STAFF_ROLE_PERMISSIONS, role) ? role : "receptionist";
+}
+
+function getStaffPermissions(role: string, _overrides?: unknown): string[] {
+  const base = STAFF_ROLE_PERMISSIONS[normalizeStaffRole(role)] || STAFF_ROLE_PERMISSIONS.receptionist;
+  return Array.from(new Set(base));
+}
+
+function canManageWorkspaceStaff(req: any, workspaceId: string): boolean {
+  const role = String(req.foxAuth?.role || "");
+  if (role === "super_admin") return true;
+  return role === "client_owner" && String(req.foxAuth?.workspaceId || "") === workspaceId;
+}
+
+function staffPermissionForPath(pathname: string): string | null {
+  const path = pathname.toLowerCase();
+  if (path.includes("/staff")) return "team";
+  if (path.includes("marketing")) return "marketing";
+  if (path.includes("promotion")) return "promotions";
+  if (path.includes("complaint")) return "complaints";
+  if (path.includes("appointment") || path.includes("booking")) return "appointments";
+  if (path.includes("order") || path.includes("sale")) return "orders";
+  if (path.includes("/crm") || path.includes("lead")) return "crm";
+  if (path.includes("ticket")) return "tickets";
+  if (path.includes("conversation") || path.includes("inbox") || path.includes("automation/agent")) return "inbox";
+  return null;
+}
+
+app.get("/api/workspaces/:workspaceId/staff", authenticateFirebaseRequest, secureAsyncRoute("list workspace staff", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  if (!workspaceId || !canManageWorkspaceStaff(req, workspaceId)) return res.status(403).json({ success: false, code: "STAFF_ADMIN_REQUIRED" });
+  const snapshot = await adminDb.collection("users").where("workspaceId", "==", workspaceId).where("role", "==", "staff").get();
+  const staff = await Promise.all(snapshot.docs.map(async (docSnap) => {
+    const profile: any = docSnap.data() || {};
+    let authUser: any = null;
+    try { authUser = await adminAuth.getUser(docSnap.id); } catch {}
+    const staffRole = normalizeStaffRole(profile.staffRole);
+    return {
+      uid: docSnap.id,
+      name: String(profile.name || authUser?.displayName || ""),
+      email: String(profile.email || authUser?.email || ""),
+      role: staffRole,
+      roleLabel: STAFF_ROLE_LABELS[staffRole],
+      permissions: getStaffPermissions(staffRole, profile.permissions),
+      active: profile.active !== false && authUser?.disabled !== true,
+      createdAt: profile.createdAt || authUser?.metadata?.creationTime || null,
+      lastSignInAt: authUser?.metadata?.lastSignInTime || null,
+    };
+  }));
+  return res.json({ success: true, staff });
+}));
+
+app.post("/api/workspaces/:workspaceId/staff", authenticateFirebaseRequest, secureAsyncRoute("create workspace staff", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  if (!workspaceId || !canManageWorkspaceStaff(req, workspaceId)) return res.status(403).json({ success: false, code: "STAFF_ADMIN_REQUIRED" });
+  const trusted = resolveTrustedWorkspace(workspaceId);
+  if (!trusted) return res.status(404).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+  const name = String(req.body?.name || "").trim().slice(0, 120);
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const staffRole = normalizeStaffRole(req.body?.role);
+  if (!name || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ success: false, code: "STAFF_INPUT_INVALID" });
+
+  let existing: any = null;
+  try { existing = await adminAuth.getUserByEmail(email); } catch (err: any) { if (err?.code !== "auth/user-not-found") throw err; }
+  if (existing) return res.status(409).json({ success: false, code: "STAFF_EMAIL_EXISTS" });
+
+  const tempPassword = "Fx_" + randomBytes(18).toString("base64url") + "A1!";
+  const authUser = await adminAuth.createUser({ email, displayName: name, password: tempPassword, disabled: false });
+  const permissions = getStaffPermissions(staffRole, req.body?.permissions);
+  const now = new Date().toISOString();
+  await adminDb.collection("users").doc(authUser.uid).set({
+    id: authUser.uid, uid: authUser.uid, name, email, role: "staff", workspaceId,
+    staffRole, permissions, active: true, createdAt: now, updatedAt: now, invitedBy: req.foxAuth.uid,
+  }, { merge: true });
+
+  let resetLink = "";
+  try {
+    resetLink = await adminAuth.generatePasswordResetLink(email, {
+      url: (getFoxPublicBaseUrl() || "https://staging.foxaiagency.online") + "/?staffInvite=1",
+      handleCodeInApp: true,
+    });
+  } catch (err: any) {
+    console.warn("[FOX Staff] Password reset link generation failed:", err?.message || err);
+  }
+
+  const emailResult = resetLink
+    ? await emailService.sendStaffInviteEmail({
+        toEmail: email,
+        staffName: name,
+        workspaceName: String(trusted.name || "FOX Workspace"),
+        roleLabel: STAFF_ROLE_LABELS[staffRole]?.ar || staffRole,
+        resetLink,
+      })
+    : { success: false, mode: "simulation" as const, error: "RESET_LINK_UNAVAILABLE" };
+
+  return res.status(201).json({
+    success: true,
+    staff: { uid: authUser.uid, name, email, role: staffRole, roleLabel: STAFF_ROLE_LABELS[staffRole], permissions, active: true, createdAt: now },
+    invite: { emailSent: emailResult.success, deliveryMode: emailResult.mode, resetLink: emailResult.success ? undefined : resetLink || undefined },
+  });
+}));
+
+app.patch("/api/workspaces/:workspaceId/staff/:uid", authenticateFirebaseRequest, secureAsyncRoute("update workspace staff", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const uid = String(req.params.uid || "").trim();
+  if (!workspaceId || !uid || !canManageWorkspaceStaff(req, workspaceId)) return res.status(403).json({ success: false, code: "STAFF_ADMIN_REQUIRED" });
+
+  const profileRef = adminDb.collection("users").doc(uid);
+  const profileSnap = await profileRef.get();
+  if (!profileSnap.exists || String(profileSnap.data()?.workspaceId || "") !== workspaceId || String(profileSnap.data()?.role || "") !== "staff") {
+    return res.status(404).json({ success: false, code: "STAFF_NOT_FOUND" });
+  }
+
+  const current: any = profileSnap.data() || {};
+  const staffRole = normalizeStaffRole(req.body?.role ?? current.staffRole);
+  const permissions = getStaffPermissions(staffRole, req.body?.permissions);
+  const active = req.body?.active === undefined ? current.active !== false : Boolean(req.body.active);
+  await profileRef.set({ staffRole, permissions, active, updatedAt: new Date().toISOString() }, { merge: true });
+  await adminAuth.updateUser(uid, { disabled: !active });
+  return res.json({
+    success: true,
+    staff: {
+      uid,
+      name: String(current.name || ""),
+      email: String(current.email || ""),
+      role: staffRole,
+      roleLabel: STAFF_ROLE_LABELS[staffRole],
+      permissions,
+      active,
+    },
+  });
+}));
+
+app.post("/api/workspaces/:workspaceId/staff/:uid/resend", authenticateFirebaseRequest, secureAsyncRoute("resend workspace staff invite", async (req: any, res: any) => {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const uid = String(req.params.uid || "").trim();
+  if (!workspaceId || !uid || !canManageWorkspaceStaff(req, workspaceId)) return res.status(403).json({ success: false, code: "STAFF_ADMIN_REQUIRED" });
+
+  const profileSnap = await adminDb.collection("users").doc(uid).get();
+  if (!profileSnap.exists || String(profileSnap.data()?.workspaceId || "") !== workspaceId) {
+    return res.status(404).json({ success: false, code: "STAFF_NOT_FOUND" });
+  }
+  const profile: any = profileSnap.data() || {};
+  const authUser = await adminAuth.getUser(uid);
+  if (!authUser.email) return res.status(400).json({ success: false, code: "STAFF_EMAIL_MISSING" });
+
+  const resetLink = await adminAuth.generatePasswordResetLink(authUser.email, {
+    url: (getFoxPublicBaseUrl() || "https://staging.foxaiagency.online") + "/?staffInvite=1",
+    handleCodeInApp: true,
+  });
+  const trusted = resolveTrustedWorkspace(workspaceId);
+  const emailResult = await emailService.sendStaffInviteEmail({
+    toEmail: authUser.email,
+    staffName: String(profile.name || authUser.displayName || ""),
+    workspaceName: String(trusted?.name || "FOX Workspace"),
+    roleLabel: STAFF_ROLE_LABELS[normalizeStaffRole(profile.staffRole)]?.ar || "عضو فريق",
+    resetLink,
+  });
+  return res.json({ success: true, emailSent: emailResult.success, resetLink: emailResult.success ? undefined : resetLink });
+}));
+
+app.get("/api/admin/unified-monitor", authenticateFirebaseRequest, secureAsyncRoute("admin unified monitor", async (req: any, res: any) => {
+  if (String(req.foxAuth?.role || "") !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+
+  const [workspaceSnap, conversationSnap] = await Promise.all([
+    adminDb.collection("workspaces").get(),
+    adminDb.collectionGroup("conversations").limit(500).get(),
+  ]);
+
+  const workspaceNames = new Map<string, string>();
+  for (const docSnap of workspaceSnap.docs) {
+    const data: any = docSnap.data() || {};
+    workspaceNames.set(docSnap.id, String(data.name || docSnap.id));
+  }
+
+  const rows = conversationSnap.docs
+    .map((docSnap) => {
+      const data: any = docSnap.data() || {};
+      const workspaceId = String(data.workspaceId || "").trim();
+      return {
+        workspaceId,
+        workspaceName: workspaceNames.get(workspaceId) || workspaceId,
+        conversationId: String(data.id || docSnap.id),
+        customerName: String(data.customerName || data.customerId || "Unknown"),
+        customerPhone: data.customerPhone ? String(data.customerPhone) : undefined,
+        channel: data.channel || "web",
+        status: data.status || "open",
+        assignedTo: data.assignedTo || "ai",
+        activeAgent: data.activeAgent || undefined,
+        lastMessage: String(data.lastMessage || ""),
+        lastMessageSender: data.lastMessageSender || "system",
+        lastMessageAt: String(data.lastMessageAt || data.updatedAt || data.createdAt || ""),
+        unreadCount: Number(data.unreadCount || 0),
+        crmLeadId: data.customerId ? String(data.customerId) : undefined,
+        handoffReason: data.handoffReason ? String(data.handoffReason) : undefined,
+      };
+    })
+    .filter((row) => row.workspaceId)
+    .sort((a, b) => String(b.lastMessageAt).localeCompare(String(a.lastMessageAt)))
+    .slice(0, 300);
+
+  return res.json({ success: true, rows, generatedAt: new Date().toISOString() });
+}));
+
+app.get("/api/admin/unified-monitor/:workspaceId/:conversationId/messages", authenticateFirebaseRequest, secureAsyncRoute("admin unified conversation messages", async (req: any, res: any) => {
+  if (String(req.foxAuth?.role || "") !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const conversationId = String(req.params.conversationId || "").trim();
+  if (!workspaceId || !conversationId) return res.status(400).json({ success: false, code: "CONVERSATION_REQUIRED" });
+  const conversationRef = adminDb.collection("workspaces").doc(workspaceId).collection("conversations").doc(conversationId);
+  const conversationSnap = await conversationRef.get();
+  if (!conversationSnap.exists) return res.status(404).json({ success: false, code: "CONVERSATION_NOT_FOUND" });
+  const messages = await conversationService.getRecentMessages(workspaceId, conversationId, 50);
+  return res.json({ success: true, conversation: { id: conversationSnap.id, ...(conversationSnap.data() || {}) }, messages });
+}));
+
+// AI Marketing Topic Suggestions
+app.post("/api/agency/marketing/ideas", authenticateFirebaseRequest, secureAsyncRoute("agency marketing topic ideas", async (req: any, res: any) => {
+  if (req.foxAuth?.role !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  const platform = ["facebook", "instagram", "both"].includes(String(req.body?.platform)) ? String(req.body.platform) : "both";
+  const language = String(req.body?.language) === "en" ? "en" : "ar";
+  const ideas = await suggestAgencyTopics({ platform: platform as any, language, campaignType: String(req.body?.campaignType || "") });
+  return res.json({ success: true, ideas, scope: "agency" });
+}));
+
+app.post("/api/agency/marketing/generate", authenticateFirebaseRequest, secureAsyncRoute("agency marketing generation", async (req: any, res: any) => {
+  if (req.foxAuth?.role !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  const topic = String(req.body?.topic || "").trim();
+  if (!topic) return res.status(400).json({ success: false, code: "TOPIC_REQUIRED" });
+  const platform = String(req.body?.platform || "facebook");
+  if (!["facebook", "instagram"].includes(platform)) return res.status(400).json({ success: false, code: "PLATFORM_INVALID" });
+  const format = ["text", "image", "video"].includes(String(req.body?.format)) ? String(req.body.format) : "text";
+  const language = String(req.body?.language) === "en" ? "en" : "ar";
+  const post = await generateAgencyPost({
+    topic,
+    platform: platform as any,
+    format: format as any,
+    audience: String(req.body?.audience || (language === "ar" ? "أصحاب ومديري المنشآت" : "Business owners and managers")),
+    tone: String(req.body?.tone || (language === "ar" ? "احترافي، ذكي، مقنع وعملي" : "Premium, intelligent, persuasive and practical")),
+    language,
+  });
+  const timing = await recommendAgencyPublishTime(platform as any);
+  const id = await saveAgencyPost({ topic, platform: platform as any, format: format as any, payload: { ...post, recommendedTime: timing } });
+  return res.json({ success: true, id, post, timing, scope: "agency" });
+}));
+
+app.get("/api/agency/marketing/posts", authenticateFirebaseRequest, secureAsyncRoute("agency marketing history", async (req: any, res: any) => {
+  if (req.foxAuth?.role !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  return res.json({ success: true, posts: await listAgencyPosts(24), scope: "agency" });
+}));
+
+app.post("/api/agency/marketing/schedule", authenticateFirebaseRequest, secureAsyncRoute("agency marketing schedule", async (req: any, res: any) => {
+  if (req.foxAuth?.role !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  const postId = String(req.body?.postId || "").trim();
+  const scheduledAt = String(req.body?.scheduledAt || "").trim();
+  const mode = String(req.body?.mode || "MANUAL_APPROVAL") === "AUTO_PUBLISH" ? "AUTO_PUBLISH" : "MANUAL_APPROVAL";
+  if (!postId || !scheduledAt) return res.status(400).json({ success: false, code: "SCHEDULE_INPUT_INVALID" });
+
+  const ref = adminDb.collection("foxAgencyMarketingPosts").doc(postId);
+  const snap = await ref.get();
+  if (!snap.exists || snap.data()?.ownerScope !== "agency") return res.status(404).json({ success: false, code: "AGENCY_POST_NOT_FOUND" });
+
+  if (mode === "AUTO_PUBLISH") {
+    return res.status(409).json({
+      success: false,
+      code: "AGENCY_SOCIAL_CONNECTION_REQUIRED",
+      message: "FOX Agency Facebook/Instagram publishing credentials are not connected yet. The post was not published or marked as published.",
+    });
+  }
+
+  await ref.set({
+    status: "scheduled",
+    scheduledAt,
+    publishMode: "MANUAL_APPROVAL",
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  return res.json({ success: true, postId, status: "scheduled", publishMode: "MANUAL_APPROVAL", scope: "agency" });
+}));
+
+app.get("/api/agency/marketing/timing/:platform", authenticateFirebaseRequest, secureAsyncRoute("agency marketing timing", async (req: any, res: any) => {
+  if (req.foxAuth?.role !== "super_admin") return res.status(403).json({ success: false, code: "SUPER_ADMIN_REQUIRED" });
+  const platform = String(req.params.platform);
+  if (!["facebook", "instagram"].includes(platform)) return res.status(400).json({ success: false, code: "PLATFORM_INVALID" });
+  return res.json({ success: true, timing: await recommendAgencyPublishTime(platform as any), scope: "agency" });
+}));
+
+app.post("/api/marketing/ideas", authenticateFirebaseRequest, secureAsyncRoute("marketing topic ideas", async (req: any, res: any) => {
+  try {
+    const workspaceId = String(req.foxAuth?.workspaceId || "").trim();
+    const trusted = workspaceId ? resolveTrustedWorkspace(workspaceId) : null;
+    if (!trusted) return res.status(403).json({ success: false, code: "WORKSPACE_NOT_FOUND" });
+
+    const access = requireWorkspaceFeature(trusted, "marketing_engine");
+    if (!access.allowed) return res.status(access.status).json(access);
+
+    const platform = ["facebook", "instagram"].includes(String(req.body?.platform || "").toLowerCase())
+      ? String(req.body.platform).toLowerCase()
+      : "facebook";
+
+    const industry = String(trusted.industry || "Small Business");
+    const businessName = String(trusted.name || "المنشأة");
+    const description = String(trusted.businessDescription || "").slice(0, 1600);
+
+    const prompt = [
+      "You are FOX Marketing Strategist.",
+      "Generate five concrete social-media topic ideas for one tenant only.",
+      'Return JSON only: {"ideas":[{"title":"...","angle":"...","pillar":"...","audience":"...","cta":"..."}]}',
+      "Do not invent prices, offers, medical claims, products, stock, services, metrics or facts.",
+      "Base the ideas on the tenant industry and description. Make them useful, specific and different from each other.",
+      "Industry: " + industry,
+      "Business name: " + businessName,
+      "Business description: " + description,
+      "Platform: " + platform,
+      "Language: " + (String(req.body?.language || "ar").toLowerCase() === "en" ? "English" : "Arabic"),
+    ].join("\n");
+
+    const result = await aiAgentService.generateChatResponse({
+      workspace: await withWorkspaceRuntimeIntegrations(trusted),
+      message: prompt,
+      channel: "marketing",
+      sessionId: "marketing-ideas:" + trusted.id + ":" + Date.now(),
+      chatHistory: [],
+      overrideConfig: {
+        customPrompt: "You are FOX Marketing Strategist. Return valid JSON only. Never invent tenant facts.",
+      },
+    });
+
+    const raw = String(result?.response || result?.aiResponse || "").trim();
+    const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonText) return res.status(503).json({ success: false, code: "MARKETING_IDEAS_INVALID" });
+    const parsed = JSON.parse(jsonText);
+    const ideas = Array.isArray(parsed?.ideas)
+      ? parsed.ideas
+          .map((idea: any) => ({
+            title: String(idea?.title || "").trim(),
+            angle: String(idea?.angle || "").trim(),
+            pillar: String(idea?.pillar || "").trim(),
+            audience: String(idea?.audience || "").trim(),
+            cta: String(idea?.cta || "").trim(),
+          }))
+          .filter((idea: any) => idea.title && idea.angle)
+          .slice(0, 5)
+      : [];
+
+    if (!ideas.length) return res.status(503).json({ success: false, code: "MARKETING_IDEAS_EMPTY" });
+    return res.json({ success: true, industry, platform, ideas, aiSource: result?.source || "openrouter" });
+  } catch (err: any) {
+    console.warn("[FOX Marketing Ideas] generation failed:", err?.message || err);
+    return res.status(503).json({ success: false, code: "MARKETING_IDEAS_UNAVAILABLE" });
+  }
+}));
+
 // AI Social Media Post Generator & Optimal Timing Endpoint
 app.post("/api/generate-ai-post", authenticateFirebaseRequest, secureAsyncRoute("marketing AI generation", async (req: any, res) => {
   try {
@@ -400,6 +773,8 @@ app.post("/api/generate-ai-post", authenticateFirebaseRequest, secureAsyncRoute(
     const parsed = JSON.parse(jsonText);
     const postContent = String(parsed.postContent || "").trim();
     if (!postContent) return res.status(503).json({ success: false, code: "MARKETING_CONTENT_EMPTY" });
+
+    const timing = await analyzeBestPublishTime(trusted.id, platform as "facebook" | "instagram");
     const mediaType = (["text", "image", "video"] as const).includes(String(req.body?.mediaType || "text") as any)
       ? String(req.body?.mediaType || "text") as "text" | "image" | "video"
       : "text";
@@ -412,9 +787,12 @@ app.post("/api/generate-ai-post", authenticateFirebaseRequest, secureAsyncRoute(
       platform,
       topic,
       content: postContent,
-      recommendedTime: String(parsed.recommendedTime || ""),
-      bestDays: String(parsed.bestDays || ""),
-      reason: String(parsed.reason || ""),
+      recommendedTime: timing.recommendedTime,
+      bestDays: String(timing.bestDays || parsed.bestDays || ""),
+      reason: String(parsed.reason || "") + " " + timing.reason,
+      timingSource: timing.source,
+      timingConfidence: timing.confidence,
+      timingSampleSize: timing.sampleSize || 0,
       suggestedVisualPrompt: String(parsed.suggestedVisualPrompt || ""),
       targetAudience,
       mediaType,
@@ -424,6 +802,15 @@ app.post("/api/generate-ai-post", authenticateFirebaseRequest, secureAsyncRoute(
     };
     const generatedRef = adminDb.collection("marketing_generated_posts").doc();
     await generatedRef.set(generated);
+    void workspaceDataService.syncTenantSheetEvent(trusted.id, "Marketing", [
+      generated.createdAt,
+      generatedRef.id,
+      generated.platform,
+      generated.topic,
+      generated.content,
+      "",
+      "generated",
+    ]);
     const mediaJobId = mediaType === "text" ? undefined : await createMediaJob(trusted.id, mediaPlan, generatedRef.id);
 
     return res.json({ success: true, id: generatedRef.id, mediaJobId, ...generated });
@@ -479,8 +866,22 @@ app.post("/api/marketing/schedule", authenticateFirebaseRequest, secureAsyncRout
   const platform = String(req.body?.platform || "facebook").trim().toLowerCase();
   const scheduleAt = String(req.body?.scheduleAt || "").trim();
   if (!content || !["facebook", "instagram"].includes(platform) || !scheduleAt) return res.status(400).json({ success: false, code: "MARKETING_SCHEDULE_INPUT_INVALID" });
+  const mode = String(req.body?.mode || "MANUAL_APPROVAL") === "AUTO_PUBLISH" ? "AUTO_PUBLISH" : "MANUAL_APPROVAL";
+  const imageUrl = String(req.body?.imageUrl || "").trim() || undefined;
+  if (mode === "AUTO_PUBLISH" && platform === "instagram" && !imageUrl) {
+    return res.status(400).json({ success: false, code: "INSTAGRAM_MEDIA_REQUIRED_FOR_AUTO_PUBLISH" });
+  }
   const calendarId = await createCalendarEntry(trusted.id, { day: scheduleAt.slice(0,10), platform: platform as any, topic: String(req.body?.topic || ""), generatedContent: content, scheduledTime: scheduleAt, status: "scheduled" });
-  const recordId = await createSocialPublishRecord(trusted.id, { platform: platform as any, content, imageUrl: String(req.body?.imageUrl || "").trim() || undefined, scheduledAt: scheduleAt, state: "scheduled", mode: String(req.body?.mode || "MANUAL_APPROVAL") === "AUTO_PUBLISH" ? "AUTO_PUBLISH" : "MANUAL_APPROVAL" });
+  const recordId = await createSocialPublishRecord(trusted.id, { platform: platform as any, content, imageUrl, scheduledAt: scheduleAt, state: "scheduled", mode });
+  void workspaceDataService.syncTenantSheetEvent(trusted.id, "Marketing", [
+    new Date().toISOString(),
+    recordId,
+    platform,
+    String(req.body?.topic || ""),
+    content,
+    scheduleAt,
+    mode,
+  ]);
   return res.json({ success: true, calendarId, recordId, state: "scheduled" });
 }));
 
@@ -1149,6 +1550,18 @@ async function persistUnifiedCustomerComplaint({
       totalComplaints: FieldValue.increment(1),
       updatedAt: now,
     }, { merge: true });
+
+    void workspaceDataService.syncTenantSheetEvent(workspace, "Complaints", [
+      now,
+      complaintId,
+      String(customerName || "العميل").trim(),
+      String(customerPhone || "").trim(),
+      String(channel),
+      text,
+      "Open",
+      priority,
+    ]);
+
     console.log(`🚨 [FOX Unified Complaint] Created | Workspace=${workspace} | Channel=${channel} | Complaint=${complaintId} | Priority=${priority}`);
     return complaintId;
   } catch (error) {
@@ -1214,60 +1627,49 @@ async function handleMessengerDirectReply({
   }
 
   try {
-    const aiClientAvailable = !!getGeminiClient();
-    if (workspace && workspace.id && aiClientAvailable) {
-      // Use central FOX AI Agent architecture for tenant response
-      try {
-        // withWorkspaceRuntimeIntegrations is defined locally in server.ts at line 3854; use it directly below
-        // Actually that isn't the exact import; use the server-local withWorkspaceRuntimeIntegrations
-        const runtimeWorkspace = workspace.id ? await withWorkspaceRuntimeIntegrations(workspace) : workspace;
-        const aiModule = await import('./src/services/aiAgentService');
-        const agentService = aiModule.aiAgentService;
-        // If agentService has generateChatResponse, use it with workspace context
-        if (agentService && typeof agentService.generateChatResponse === 'function') {
-          const result = await agentService.generateChatResponse({
-            workspace: runtimeWorkspace,
-            message: userMessage,
-            channel: "messenger",
-            sessionId: `messenger:${workspace.id}:${String(senderPsid || 'unknown')}`,
-          });
-          replyText = result?.response || result?.aiResponse || "";
-          handoffRequired = result?.handoffRequired === true;
-          handoffReason = String(result?.handoffReason || "AI could not safely complete the request");
-        } else {
-          // Fallback to Gemini when central agent service unavailable
-          const ai = getGeminiClient();
-          if (ai) {
-            const response = await ai.models.generateContent({
-              model: "gemini-2.5-flash",
-              contents: `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على ماسنجر فيسبوك: "${userMessage}". اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`
-            });
-            replyText = response.text || "";
-          }
-        }
-      } catch (agentErr: any) {
-        console.warn("[Messenger Central Agent Integration] Agent error:", agentErr?.message || agentErr);
-        // Fail-safe fallback: don't expose agent errors to customers; use local fallback
-        replyText = "";
+    const resolvedWorkspace = messengerWorkspaceId
+      ? resolveTrustedWorkspace(messengerWorkspaceId)
+      : workspace?.id
+        ? resolveTrustedWorkspace(String(workspace.id))
+        : null;
+
+    if (!resolvedWorkspace) {
+      return { success: false, error: "WORKSPACE_NOT_MAPPED", replyText: "" };
+    }
+
+    try {
+      const runtimeWorkspace = await withWorkspaceRuntimeIntegrations(resolvedWorkspace);
+      const result = await aiAgentService.generateChatResponse({
+        workspace: runtimeWorkspace,
+        message: userMessage,
+        channel: "messenger",
+        sessionId: "messenger:" + resolvedWorkspace.id + ":" + String(senderPsid || "unknown"),
+      });
+
+      replyText = String(result?.response || result?.aiResponse || "").trim();
+      handoffRequired = result?.handoffRequired === true;
+      handoffReason = String(result?.handoffReason || "AI could not safely complete the request");
+
+      if (!replyText && !handoffRequired) {
+        return { success: false, error: "AI_EMPTY_RESPONSE", replyText: "" };
       }
-    } else {
-      // Fallback to Gemini when workspace not mapped or agent unavailable
-      const ai = getGeminiClient();
-      if (ai) {
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: `أنت بوت المبيعات والخدمات التلقائي لشركة FOX AI Agency. رسالة عميل على ماسنجر فيسبوك: "${userMessage}". اكتب رد احترافي وودود وسريع باللغة العربية يلبي طلب العميل ويشرح خدمات الذكاء الاصطناعي ويدعوه لبدء الاستفادة.`
-        });
-        replyText = response.text || "";
-      }
+    } catch (agentErr: any) {
+      console.warn("[Messenger Central Agent] AI generation failed safely:", agentErr?.message || agentErr);
+      handoffRequired = true;
+      handoffReason = "Central FOX Brain unavailable or unable to safely answer";
+      replyText = "";
     }
   } catch (e: any) {
-    console.warn("[Messenger DM AI Gen Fallback] AI generation failed:", e);
+    console.warn("[Messenger AI] safe failure:", e?.message || e);
+    handoffRequired = true;
+    handoffReason = "Central FOX Brain unavailable";
     replyText = "";
   }
 
   if (!replyText || replyText.trim().length === 0) {
-    replyText = `أهلاً بك! 🌸 شرفتنا برسالتك في FOX AI Agency. يسعدنا جداً مساعدتك والرد على كافة استفساراتك حول حلولنا بالذكاء الاصطناعي والتسويق الرقمي! كيف يمكننا مساعدتك اليوم؟ ✨`;
+    if (!handoffRequired) {
+      return { success: false, error: "AI_EMPTY_RESPONSE", replyText: "" };
+    }
   }
 
   if (inboxConversation && messengerWorkspaceId) {
@@ -1333,37 +1735,56 @@ async function handleMetaAutoReply({
   let publicReplyText = customPublicReply || "";
   let privateDmText = customPrivateDm || "";
 
-  // 1. AI Response Generation using Gemini if custom text not provided
+  // 1. Use the same tenant-scoped FOX Brain for comment replies.
+  // Fail closed when tenant context or the central AI is unavailable.
   if (!publicReplyText || !privateDmText) {
     try {
-      const ai = getGeminiClient();
-      if (ai) {
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: `أنت بوت تسويقي ذكي لشركة FOX AI Agency. تعليق عميل على بوست فيسبوك: "${commentText}" واسمه "${senderName}".
-اكتب كود JSON فقط بدون أية علامات مارك داون بالشكل التالي:
-{
-  "publicReply": "رد عام ودود ومختصر جداً للتعليق يخبره برضا وسعادة أنه تم إرسال التفاصيل كاملة في الرسائل الخاصة (الخاص/DM) مع إيموجي مبهج",
-  "privateDm": "رسالة خاصة دافئة وواضحة جداً ترسل له على الخاص تفصل له خدمات الشركة وتجيب عن تعليقه وتدعوه لبدء الاستفادة فوراً"
-}`
-        });
-
-        const rawText = response.text || "";
-        const cleaned = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
-        const parsed = JSON.parse(cleaned);
-        if (parsed.publicReply) publicReplyText = parsed.publicReply;
-        if (parsed.privateDm) privateDmText = parsed.privateDm;
+      const pageLookup = await adminDb
+        .collection("workspaces")
+        .where("metaPageId", "==", String(pageId || "").trim())
+        .limit(1)
+        .get();
+      if (!pageLookup.empty) {
+        const tenant = resolveTrustedWorkspace(pageLookup.docs[0].id);
+        if (tenant) {
+          const result = await aiAgentService.generateChatResponse({
+            workspace: await withWorkspaceRuntimeIntegrations(tenant),
+            message: commentText,
+            channel: "meta_comment",
+            sessionId: "meta-comment:" + tenant.id + ":" + commentId,
+            overrideConfig: {
+              customPrompt:
+                "Handle this social-media comment for the tenant. Return JSON only with publicReply and privateDm. Use only verified tenant facts. Do not invent prices, offers, services, stock, policies or claims. If the comment cannot be safely answered from tenant data, set both fields to empty strings.",
+            },
+          });
+          const raw = String(result?.response || result?.aiResponse || "").trim();
+          const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+          if (jsonText) {
+            const parsed = JSON.parse(jsonText);
+            if (parsed.publicReply) publicReplyText = String(parsed.publicReply).trim();
+            if (parsed.privateDm) privateDmText = String(parsed.privateDm).trim();
+          }
+          if (result?.handoffRequired) {
+            publicReplyText = "";
+            privateDmText = "";
+          }
+        }
       }
     } catch (e) {
-      console.warn("[Meta AutoReply AI Gen Fallback]:", e);
+      console.warn("[Meta AutoReply Central Brain] failed safely:", e);
+      publicReplyText = "";
+      privateDmText = "";
     }
   }
 
-  if (!publicReplyText) {
-    publicReplyText = `أهلاً بك يا فندم! 🌸 تم الرد على استفسارك بكل التفاصيل في الرسائل الخاصة (DM)، تفقد الخاص الآن! ✨`;
-  }
-  if (!privateDmText) {
-    privateDmText = `أهلاً بك يا ${senderName}! 🌺 يسعدنا تواصلك مع FOX AI Agency. بالنسبة لاستفسارك: "${commentText}"، نرحب بك جداً ونوفر لك كافة باقتنا وخدماتنا بالذكاء الاصطناعي. هل تود أن نساعدك في اختيار الباقة المناسبة لشغلك؟`;
+  if (!publicReplyText || !privateDmText) {
+    return {
+      publicReplySuccess: false,
+      privateDmSuccess: false,
+      publicReplyData: null,
+      privateDmData: null,
+      error: "AI_OR_TENANT_CONTEXT_UNAVAILABLE",
+    };
   }
 
   // 2. Post Public Reply to Comment
@@ -4168,6 +4589,27 @@ async function authenticateFirebaseRequest(
       profile,
     };
 
+    if (authoritativeRole === "staff") {
+      const profileWorkspaceId = String(profile.workspaceId || "");
+      const targetWorkspaceId = String(
+        req.params?.workspaceId ||
+        req.body?.workspaceId ||
+        req.query?.workspaceId ||
+        profileWorkspaceId ||
+        "",
+      );
+      if (targetWorkspaceId && profileWorkspaceId && targetWorkspaceId !== profileWorkspaceId) {
+        return res.status(403).json({ success: false, code: "STAFF_WORKSPACE_FORBIDDEN" });
+      }
+      const permission = staffPermissionForPath(req.path || "");
+      if (permission) {
+        const permissions = getStaffPermissions(normalizeStaffRole(profile.staffRole), profile.permissions);
+        if (!permissions.includes(permission)) {
+          return res.status(403).json({ success: false, code: "STAFF_PERMISSION_REQUIRED", permission });
+        }
+      }
+    }
+
     console.log(
       `🔐 [FOX Auth] Verified | UID=${uid} | Role=${authoritativeRole} | Workspace=${profile.workspaceId || "AGENCY"}`
     );
@@ -4217,6 +4659,13 @@ async function authenticateFirebaseRegistrationRequest(
 
     const decoded = await adminAuth.verifyIdToken(idToken);
     const verifiedEmail = normalizeRegistrationEmail(decoded.email);
+    if (decoded.email_verified !== true) {
+      return res.status(403).json({
+        success: false,
+        code: "REGISTRATION_EMAIL_NOT_VERIFIED",
+        error: "Email verification is required before workspace provisioning",
+      });
+    }
     if (!verifiedEmail) {
       return res.status(403).json({
         success: false,
@@ -6149,6 +6598,13 @@ app.post(
       cached.crmSpreadsheetId = spreadsheetId;
       cached.googleSheetsConnectedAt = now;
       cached.updatedAt = now;
+    }
+
+    let sheetStructure = null;
+    try {
+      sheetStructure = await ensureCRMSpreadsheetStructure(accessToken, spreadsheetId);
+    } catch (sheetError: any) {
+      console.warn("[FOX Google Sheets] Existing spreadsheet structure could not be upgraded:", sheetError?.message || sheetError);
     }
 
     return res.json({

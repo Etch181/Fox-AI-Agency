@@ -151,5 +151,5 @@ test("no secrets/tokens in logs: verifyInstagramConnection does not leak tokens"
 test("AI response generation fallback works without Gemini client", async () => {
   const result = await generateInstagramAIResponse("any-workspace", "test message");
   assert.ok(result.length > 0);
-  assert.ok(result.includes("FOX AI Agency") || result.includes("Arabic"));
+  assert.ok(result.includes("أقدر أساعدك") || result.includes("FOX AI Agency") || result.includes("Arabic"));
 });

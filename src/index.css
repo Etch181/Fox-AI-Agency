@@ -93,3 +93,68 @@
     translate: 100% 0 !important;
   }
 }
+
+
+/* FOX Social Studio motion system */
+.fox-marketing-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(to bottom, black 0%, transparent 85%);
+}
+.fox-orb {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  border-radius: 999px;
+  filter: blur(70px);
+  opacity: .18;
+  animation: foxOrbFloat 8s ease-in-out infinite;
+  pointer-events: none;
+}
+.fox-orb-one { top: -100px; right: 4%; background: #f97316; }
+.fox-orb-two { bottom: -160px; left: 18%; background: #7c3aed; animation-delay: -3s; }
+.fox-card-lift { transition: transform .28s ease, box-shadow .28s ease, border-color .28s ease; }
+.fox-card-lift:hover { transform: translateY(-3px); box-shadow: 0 18px 50px rgba(15,23,42,.12); border-color: rgba(249,115,22,.25); }
+.fox-idea-card { transition: transform .22s ease, border-color .22s ease, background .22s ease; }
+.fox-idea-card:hover { transform: translateX(-2px); border-color: rgba(249,115,22,.45); background: rgba(249,115,22,.035); }
+.fox-button-shine {
+  position: absolute;
+  inset: 0 auto 0 -25%;
+  width: 30%;
+  transform: skewX(-20deg);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent);
+  animation: foxButtonShine 3.8s ease-in-out infinite;
+}
+.fox-empty-state { position: relative; overflow: hidden; }
+.fox-empty-state::before {
+  content: "";
+  position: absolute;
+  inset: 14%;
+  border: 1px solid rgba(249,115,22,.12);
+  border-radius: 32px;
+  animation: foxPulse 3s ease-in-out infinite;
+}
+.fox-float { animation: foxFloat 4.5s ease-in-out infinite; }
+@keyframes foxOrbFloat {
+  0%, 100% { transform: translate3d(0,0,0) scale(1); }
+  50% { transform: translate3d(0,16px,0) scale(1.06); }
+}
+@keyframes foxButtonShine {
+  0% { transform: translateX(0) skewX(-20deg); opacity: 0; }
+  25%, 55% { opacity: 1; }
+  75%, 100% { transform: translateX(420%) skewX(-20deg); opacity: 0; }
+}
+@keyframes foxPulse {
+  0%, 100% { transform: scale(.98); opacity: .35; }
+  50% { transform: scale(1.02); opacity: .75; }
+}
+@keyframes foxFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fox-orb, .fox-button-shine, .fox-empty-state::before, .fox-float { animation: none !important; }
+  .fox-card-lift, .fox-idea-card { transition: none !important; }
+}

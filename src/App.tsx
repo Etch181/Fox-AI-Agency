@@ -64,11 +64,10 @@ import { AdminActivationCodes } from "./components/admin/AdminActivationCodes";
 import { AdminTelegramBot } from "./components/admin/AdminTelegramBot";
 import { AdminN8nWorkflows } from "./components/admin/AdminN8nWorkflows";
 import { AdminAgentCenter } from "./components/admin/AdminAgentCenter";
-import { AdminInfrastructure } from "./components/admin/AdminInfrastructure";
 import { AdminSupportTickets } from "./components/admin/AdminSupportTickets";
-import { AdminAuditLogs } from "./components/admin/AdminAuditLogs";
-import { AdminGeminiMonitoring } from "./components/admin/AdminGeminiMonitoring";
 import { AdminAgencyRatings } from "./components/admin/AdminAgencyRatings";
+import { AdminUnifiedMonitor } from "./components/admin/AdminUnifiedMonitor";
+import { AdminAgencyMarketing } from "./components/admin/AdminAgencyMarketing";
 
 // Client Views
 import { ClientDashboard } from "./components/client/ClientDashboard";
@@ -81,7 +80,6 @@ import { ClientTelegramToken } from "./components/client/ClientTelegramToken";
 import { ClientWhatsAppQR } from "./components/client/ClientWhatsAppQR";
 import { ClientLiveChat } from "./components/client/ClientLiveChat";
 import { ClientSubscription } from "./components/client/ClientSubscription";
-import { ClientN8n } from "./components/client/ClientN8n";
 import { ClientStaff } from "./components/client/ClientStaff";
 import { ClientSupportTickets } from "./components/client/ClientSupportTickets";
 import { ClientPromotions } from "./components/client/ClientPromotions";
@@ -90,8 +88,6 @@ import { ClientServiceRating } from "./components/client/ClientServiceRating";
 import { ClientUnifiedInbox } from "./components/client/ClientUnifiedInbox";
 import { ClientKnowledgeBuilder } from "./components/client/ClientKnowledgeBuilder";
 import { ClientFoxAdvisor } from "./components/client/ClientFoxAdvisor";
-import { ClientAIEngagement } from "./components/client/ClientAIEngagement";
-import { ClientMarketingAgent } from "./components/client/ClientMarketingAgent";
 import { ClientIntegrations } from "./components/client/ClientIntegrations";
 import { AgentRegistryPage } from "./components/client/AgentRegistryPage";
 
@@ -379,16 +375,14 @@ const AppContent: React.FC = () => {
         return <AdminN8nWorkflows />;
       case "admin_agents":
         return <AdminAgentCenter />;
-      case "admin_infrastructure":
-        return <AdminInfrastructure />;
       case "admin_tickets":
         return <AdminSupportTickets />;
-      case "admin_audit_logs":
-        return <AdminAuditLogs />;
-      case "admin_gemini_status":
-        return <AdminGeminiMonitoring />;
       case "admin_ratings":
         return <AdminAgencyRatings />;
+      case "admin_unified_monitor":
+        return <AdminUnifiedMonitor />;
+      case "admin_agency_marketing":
+        return <AdminAgencyMarketing />;
 
       // Client Views (Protected by WorkspaceGuard)
       case "client_dashboard":
@@ -453,12 +447,6 @@ const AppContent: React.FC = () => {
             </PlanFeatureGuard>
           </WorkspaceGuard>
         );
-      case "client_live_simulator":
-        return (
-          <WorkspaceGuard>
-            <ClientLiveChat />
-          </WorkspaceGuard>
-        );
       case "client_subscription":
         return (
           <WorkspaceGuard>
@@ -513,34 +501,6 @@ const AppContent: React.FC = () => {
         return (
           <WorkspaceGuard>
             <ClientFoxAdvisor />
-          </WorkspaceGuard>
-        );
-      case "client_ai_analytics":
-        if (currentUser.role !== "super_admin") {
-          return (
-            <WorkspaceGuard>
-              <ClientDashboard onNavigate={navigateTo} />
-            </WorkspaceGuard>
-          );
-        }
-
-        return (
-          <WorkspaceGuard>
-            <ClientAIEngagement />
-          </WorkspaceGuard>
-        );
-      case "client_marketing_agent":
-        if (currentUser.role !== "super_admin") {
-          return (
-            <WorkspaceGuard>
-              <ClientDashboard onNavigate={navigateTo} />
-            </WorkspaceGuard>
-          );
-        }
-
-        return (
-          <WorkspaceGuard>
-            <ClientMarketingAgent />
           </WorkspaceGuard>
         );
       case "client_integrations":

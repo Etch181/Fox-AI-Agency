@@ -57,7 +57,7 @@ ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY \
 # authenticated Firebase Admin SDK) can pass without pointing at a
 # real Firestore project. The script lives at
 # `scripts/run-integration-tests.mjs` and is repo-owned.
-RUN npm run lint && npm run build
+RUN npm run lint && npm run test:integration && npm run build
 
 # ---- Stage 2: Runtime ----
 FROM node:24-alpine AS runtime

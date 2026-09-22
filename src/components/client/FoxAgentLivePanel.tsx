@@ -29,7 +29,7 @@ export const FoxAgentLivePanel: React.FC = () => {
   useEffect(()=>{ load(); const timer=window.setInterval(load,20000); return()=>window.clearInterval(timer); },[currentWorkspace?.id,currentUser?.role]);
   if(!currentWorkspace || !currentUser || !["super_admin","client_owner"].includes(currentUser.role)) return null;
 
-  const agentMap=new Map(agents.map(a=>[a.id,a]));
+  const agentMap = new Map<string, Agent>(agents.map((agent): [string, Agent] => [agent.id, agent]));
   return <section className="mt-6 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex items-start gap-3">

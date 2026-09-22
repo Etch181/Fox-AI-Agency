@@ -67,6 +67,8 @@ export interface BestTimeRecommendation {
   source: 'heuristic' | 'recorded_evidence';
   confidence: number; // 0-1
   evidenceRefs?: string[];
+  bestDays?: string;
+  sampleSize?: number;
 }
 
 export interface MarketingPerformanceRecord {
@@ -238,6 +240,125 @@ export async function listCalendar(
   return snap.docs.map((d) => ({ ...d.data() as ContentCalendarEntry, id: d.id }));
 }
 
+export async function analyzeBestPublishTime(
+  workspaceId: string,
+  platform: 'facebook' | 'instagram'
+): Promise<BestTimeRecommendation> {
+  const timezone = 'Africa/Cairo';
+  const snap = await adminDb
+    .collection('socialPublishingRecords')
+    .where('workspaceId', '==', workspaceId)
+    .where('platform', '==', platform)
+    .where('state', '==', 'published')
+    .limit(100)
+    .get();
+
+  const performanceSnap = await adminDb
+    .collection(PERFORMANCE_COLLECTION)
+    .where('workspaceId', '==', workspaceId)
+    .limit(100)
+    .get();
+
+  const performanceByPost = new Map<string, number>();
+  for (const docSnap of performanceSnap.docs) {
+    const data: any = docSnap.data() || {};
+    const engagement = Number(data.engagement || 0) + Number(data.shares || 0) * 2 + Number(data.comments || 0) * 2 + Number(data.clicks || 0);
+    if (data.externalPostId) performanceByPost.set(String(data.externalPostId), Math.max(1, engagement));
+  }
+
+  const samples = snap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
+    .filter((post: any) => post.publishedAt || post.scheduledAt);
+
+  if (samples.length < 3) {
+    return recommendPublishTime({
+      workspaceId,
+      businessGoal: '',
+      campaignObjective: '',
+      targetAudience: '',
+      preferredPlatforms: [platform],
+      postingFrequency: '',
+      toneBrandVoice: '',
+      industryType: '',
+      contentPillars: [],
+      timezone,
+      approvalMode: 'MANUAL_APPROVAL',
+      createdAt: '',
+      updatedAt: '',
+    }, platform);
+  }
+
+  const byHour = new Map<number, { score: number; count: number }>();
+  const byDay = new Map<string, number>();
+  for (const post of samples) {
+    const timestamp = String(post.publishedAt || post.scheduledAt || '');
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) continue;
+    const local = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'long',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const hour = Number(local.find((p) => p.type === 'hour')?.value || 18);
+    const weekday = String(local.find((p) => p.type === 'weekday')?.value || 'weekday');
+    const score = performanceByPost.get(String(post.externalPostId || '')) || 1;
+    const currentHour = byHour.get(hour) || { score: 0, count: 0 };
+    currentHour.score += score;
+    currentHour.count += 1;
+    byHour.set(hour, currentHour);
+    byDay.set(weekday, (byDay.get(weekday) || 0) + score);
+  }
+
+  const hourWinner = [...byHour.entries()].sort((a, b) => {
+    const aRate = a[1].score / Math.max(1, a[1].count);
+    const bRate = b[1].score / Math.max(1, b[1].count);
+    return bRate - aRate;
+  })[0];
+  const dayWinners = [...byDay.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([day]) => day);
+  const hour = hourWinner?.[0] ?? (platform === 'instagram' ? 19 : 18);
+  const confidence = Math.min(0.92, 0.45 + Math.min(0.35, samples.length / 40));
+
+  const today = new Date();
+  const dayParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(today);
+  const year = Number(dayParts.find((p) => p.type === 'year')?.value || today.getUTCFullYear());
+  const month = Number(dayParts.find((p) => p.type === 'month')?.value || today.getUTCMonth() + 1);
+  const day = Number(dayParts.find((p) => p.type === 'day')?.value || today.getUTCDate());
+  const localNoonProbe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const offsetParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(localNoonProbe);
+  const localNoonAsUtc = Date.UTC(
+    Number(offsetParts.find((p) => p.type === 'year')?.value || year),
+    Number(offsetParts.find((p) => p.type === 'month')?.value || month) - 1,
+    Number(offsetParts.find((p) => p.type === 'day')?.value || day),
+    Number(offsetParts.find((p) => p.type === 'hour')?.value || 12),
+    Number(offsetParts.find((p) => p.type === 'minute')?.value || 0),
+  );
+  const timezoneOffsetMs = localNoonAsUtc - localNoonProbe.getTime();
+  const recommended = new Date(Date.UTC(year, month - 1, day, hour, 30, 0) - timezoneOffsetMs);
+  return {
+    platform,
+    recommendedTime: recommended.toISOString(),
+    reason: `Based on ${samples.length} published ${platform} posts in ${timezone}, the strongest observed engagement window is around ${String(hour).padStart(2, '0')}:30.`,
+    source: 'recorded_evidence',
+    confidence,
+    bestDays: dayWinners.join(' + ') || undefined,
+    sampleSize: samples.length,
+  };
+}
+
 export function recommendPublishTime(
   strategy: MarketingStrategy,
   platform: 'facebook' | 'instagram'
@@ -246,8 +367,35 @@ export function recommendPublishTime(
   // Replaceable with real analytics-based optimization once performance data exists
   const timeZone = strategy.timezone || 'Africa/Cairo';
   const baseHour = platform === 'instagram' ? 19 : 18; // Instagram evening vs Facebook evening
-  const recommended = new Date();
-  recommended.setUTCHours(baseHour, 30, 0, 0);
+  const today = new Date();
+  const dayParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(today);
+  const year = Number(dayParts.find((p) => p.type === 'year')?.value || today.getUTCFullYear());
+  const month = Number(dayParts.find((p) => p.type === 'month')?.value || today.getUTCMonth() + 1);
+  const day = Number(dayParts.find((p) => p.type === 'day')?.value || today.getUTCDate());
+  const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(probe);
+  const localAsUtc = Date.UTC(
+    Number(parts.find((p) => p.type === 'year')?.value || year),
+    Number(parts.find((p) => p.type === 'month')?.value || month) - 1,
+    Number(parts.find((p) => p.type === 'day')?.value || day),
+    Number(parts.find((p) => p.type === 'hour')?.value || 12),
+    Number(parts.find((p) => p.type === 'minute')?.value || 0),
+  );
+  const offsetMs = localAsUtc - probe.getTime();
+  const recommended = new Date(Date.UTC(year, month - 1, day, baseHour, 30, 0) - offsetMs);
   const isoTime = recommended.toISOString();
   return {
     platform,
@@ -255,6 +403,8 @@ export function recommendPublishTime(
     reason: `Heuristic default for ${platform} in ${timeZone} (evening peak). Replaceable with analytics optimization.`,
     source: 'heuristic',
     confidence: 0.3,
+    bestDays: platform === 'instagram' ? 'Thursday + Saturday' : 'Wednesday + Sunday',
+    sampleSize: 0,
   };
 }
 

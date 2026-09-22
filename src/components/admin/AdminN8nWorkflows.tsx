@@ -92,37 +92,42 @@ export const AdminN8nWorkflows: React.FC = () => {
         </div>
       )}
 
+
       <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-5 shadow-sm dark:border-violet-900/40 dark:bg-violet-950/10">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-xs font-black uppercase tracking-wider text-violet-500">FOX Agent Mesh</p>
-            <h2 className="mt-1 text-lg font-black text-slate-900 dark:text-white">{isAr ? "وكلاء FOX داخل n8n" : "FOX Agents inside n8n"}</h2>
-            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{isAr ? "الوكلاء الحقيقيون المرتبطون بـ FOX. كل Workflow يستقبل حدثًا موقّعًا ويستدعي Agent المتخصص داخل FOX." : "Live FOX agent workflows. Each workflow receives a signed event and calls the specialized FOX agent runtime."}</p>
+            <p className="text-xs font-black uppercase tracking-wider text-violet-500">FOX Agent Contracts</p>
+            <h2 className="mt-1 text-lg font-black text-slate-900 dark:text-white">{isAr ? "عقود الوكلاء الحقيقية" : "Real agent contracts"}</h2>
+            <p className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">
+              {isAr ? "n8n هو طبقة orchestration؛ FOX Brain هو طبقة الفهم والبيانات. لا نعرض Workflow على أنه نشط إلا عندما يكون الربط الحقيقي متاحاً." : "n8n is the orchestration layer; FOX Brain owns reasoning and tenant data. We never mark a workflow active without a real runtime check."}
+            </p>
           </div>
-          <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-black text-emerald-600">8 AGENTS</span>
+          <span className={`rounded-full px-3 py-1 text-[10px] font-black ${runtimeStatus?.status === "online" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600"}`}>
+            {runtimeStatus?.status === "online" ? (isAr ? "العقل متصل" : "BRAIN ONLINE") : (isAr ? "قيد الفحص" : "CHECKING")}
+          </span>
         </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[
-            ["VL1CDTDROqU1uhOy", "FOX Clinic Appointment Agent", "المواعيد والحجوزات", "fox-agent-appointments"],
-            ["Jvh1Ehx49ij5NWj9", "FOX Complaints & Suggestions Agent", "الشكاوى والاقتراحات", "fox-agent-complaints"],
-            ["GCp6SOxqLIOr07BP", "FOX Pharmacy Sales Agent", "مبيعات الصيدليات", "fox-agent-pharmacy_sales"],
-            ["yQ33piFcr7vn9LZe", "FOX Retail Sales Agent", "مبيعات التجزئة", "fox-agent-retail_sales"],
-            ["qS3mfcBwHjGwVdCb", "FOX Restaurant Agent", "المطاعم والطلبات", "fox-agent-restaurant"],
-            ["tBqzoSsGUxImlvvr", "FOX Course Center Agent", "مراكز الكورسات", "fox-agent-course_center"],
-            ["GORfMjAmOefodl7w", "FOX Marketing & Social Media Agent", "التسويق والسوشيال", "fox-agent-marketing"],
-            ["CxcwHTuvmdhXPqGq", "FOX Customer Support Agent", "خدمة العملاء", "fox-agent-support"],
-          ].map(([id, name, arName, path]) => (
-            <div key={id} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            ["clinic-appointments", isAr ? "الحجوزات والمواعيد" : "Appointments"],
+            ["complaints-suggestions", isAr ? "الشكاوى والمتابعات" : "Complaints"],
+            ["pharmacy-sales", isAr ? "مبيعات الصيدلية" : "Pharmacy Sales"],
+            ["retail-sales", isAr ? "مبيعات المتجر" : "Retail Sales"],
+            ["restaurant-operations", isAr ? "المطعم والطلبات" : "Restaurant Operations"],
+            ["course-center", isAr ? "مركز الكورسات" : "Course Center"],
+            ["sales", isAr ? "المبيعات" : "Sales"],
+            ["customer-support", isAr ? "خدمة العملاء" : "Customer Support"],
+            ["marketing", isAr ? "التسويق والسوشيال" : "Marketing & Social"],
+          ].map(([role, label]) => (
+            <div key={role} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <h3 className="text-xs font-black text-slate-900 dark:text-white">{isAr ? arName : name}</h3>
-                  <p className="mt-1 font-mono text-[9px] text-slate-400">{path}</p>
+                  <div className="text-xs font-black text-slate-900 dark:text-white">{label}</div>
+                  <div className="mt-1 font-mono text-[9px] text-slate-400">{role}</div>
                 </div>
-                <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[9px] font-black text-emerald-600">ACTIVE</span>
+                <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[9px] font-black text-emerald-600">
+                  FOX Brain
+                </span>
               </div>
-              {n8nUrl && <a href={`${n8nUrl.replace(/\/$/, "")}/workflow/${id}`} target="_blank" rel="noreferrer" className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white hover:bg-violet-600 dark:bg-slate-800">
-                {isAr ? "فتح الـWorkflow" : "Open Workflow"}<ExternalLink className="h-3 w-3" />
-              </a>}
             </div>
           ))}
         </div>

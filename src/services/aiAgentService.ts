@@ -2,7 +2,6 @@ import { searchKnowledge, formatKnowledgeResults } from "./qdrantKnowledgeServic
 import { aiModelAnalyticsService } from "./aiModelAnalyticsService.ts";
 import { GoogleGenAI, Type } from "@google/genai";
 import OpenAI from "openai";
-import { checkAvailability, bookAppointmentInSheet } from "./googleSheetsService.ts";
 import { workspaceDataService } from "./workspaceDataService.ts";
 import { triggerExternalCRM } from "./crmService.ts";
 import { sharedMemoryService } from "./sharedMemoryService.ts";
@@ -4366,26 +4365,16 @@ DATE SAFETY RULES:
                             }
                           );
 
-                        if (
-                          workspace.googleSheetsAccessToken &&
-                          workspace.crmSpreadsheetId
-                        ) {
-                          try {
-                            await bookAppointmentInSheet(
-                              workspace.googleSheetsAccessToken,
-                              workspace.crmSpreadsheetId,
-                              date,
-                              time,
-                              freshName,
-                              freshPhone
-                            );
-                          } catch (sheetError) {
-                            console.warn(
-                              "[FOX CRM] Google Sheets sync failed; Firestore booking remains saved.",
-                              sheetError
-                            );
-                          }
-                        }
+                        void workspaceDataService.syncTenantSheetEvent(workspace.id, "Reservations", [
+                          appointment.createdAt || new Date().toISOString(),
+                          appointment.id,
+                          freshName,
+                          freshPhone,
+                          date,
+                          time,
+                          channel,
+                          "booked",
+                        ]);
 
                         if (workspace.externalCrmWebhookUrl) {
                           try {
@@ -4625,27 +4614,16 @@ DATE SAFETY RULES:
                           }
                         );
 
-                      // Optional Google Sheets sync.
-                      if (
-                        workspace.googleSheetsAccessToken &&
-                        workspace.crmSpreadsheetId
-                      ) {
-                        try {
-                          await bookAppointmentInSheet(
-                            workspace.googleSheetsAccessToken,
-                            workspace.crmSpreadsheetId,
-                            date,
-                            time,
-                            name,
-                            phone
-                          );
-                        } catch (sheetError) {
-                          console.warn(
-                            "[FOX CRM] Google Sheets sync failed; Firestore booking remains saved.",
-                            sheetError
-                          );
-                        }
-                      }
+                      void workspaceDataService.syncTenantSheetEvent(workspace.id, "Reservations", [
+                        appointment.createdAt || new Date().toISOString(),
+                        appointment.id,
+                        name,
+                        phone,
+                        date,
+                        time,
+                        channel,
+                        "booked",
+                      ]);
 
                       // Optional external CRM / n8n.
                       if (
@@ -5070,27 +5048,16 @@ DATE SAFETY RULES:
                       }
                     );
 
-                  // Optional Google Sheets synchronization.
-                  if (
-                    workspace.googleSheetsAccessToken &&
-                    workspace.crmSpreadsheetId
-                  ) {
-                    try {
-                      await bookAppointmentInSheet(
-                        workspace.googleSheetsAccessToken,
-                        workspace.crmSpreadsheetId,
-                        date,
-                        time,
-                        name,
-                        phone
-                      );
-                    } catch (sheetError) {
-                      console.warn(
-                        "[FOX CRM] Google Sheets sync failed; Firestore booking remains saved.",
-                        sheetError
-                      );
-                    }
-                  }
+                  void workspaceDataService.syncTenantSheetEvent(workspace.id, "Reservations", [
+                    appointment.createdAt || new Date().toISOString(),
+                    appointment.id,
+                    name,
+                    phone,
+                    date,
+                    time,
+                    channel,
+                    "booked",
+                  ]);
 
                   // Optional external CRM / n8n webhook.
                   if (workspace.externalCrmWebhookUrl) {
@@ -5140,9 +5107,27 @@ DATE SAFETY RULES:
 
               } else if (call.name === "recordSale") {
                 const { itemName, price, customerName, customerPhone } = call.args as any;
-                // Log the sale to external CRM or Webhook if provided
-                await triggerExternalCRM(workspace.id, "sale", { itemName, price, customerName, customerPhone }, workspace.externalCrmWebhookUrl);
-                functionResult = { success: true, message: "Sale recorded successfully." };
+                const sale = await workspaceDataService.recordSale(workspace.id, {
+                  itemName,
+                  price,
+                  customerName,
+                  customerPhone,
+                  channel,
+                  sessionId: params.sessionId,
+                });
+                if (workspace.externalCrmWebhookUrl) {
+                  await triggerExternalCRM(
+                    workspace.id,
+                    "sale",
+                    { sale },
+                    workspace.externalCrmWebhookUrl,
+                  );
+                }
+                functionResult = {
+                  success: true,
+                  orderId: sale.id,
+                  message: "Sale recorded successfully in FOX CRM.",
+                };
               }
             } catch (err: any) {
               functionResult = { error: err.message };
