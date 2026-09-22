@@ -604,6 +604,12 @@ PY
 # shellcheck disable=SC1090
 . "$PUBLIC_ENV"
 
+# The host Docker daemon currently exposes a read-only Buildx activity path.
+# Use the legacy Docker builder for this staging-only verification/deploy path
+# so the trusted launcher does not depend on Buildx activity metadata writes.
+export DOCKER_BUILDKIT=0
+export COMPOSE_DOCKER_CLI_BUILD=0
+
 printf '\n=== 6. BUILD UPDATED STAGING IMAGE FROM SHARED SOURCE ===\n'
 
 docker compose \
