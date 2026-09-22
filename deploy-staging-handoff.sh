@@ -604,11 +604,15 @@ PY
 # shellcheck disable=SC1090
 . "$PUBLIC_ENV"
 
-# The host Docker daemon currently exposes a read-only Buildx activity path.
-# Use the legacy Docker builder for this staging-only verification/deploy path
-# so the trusted launcher does not depend on Buildx activity metadata writes.
-export DOCKER_BUILDKIT=0
-export COMPOSE_DOCKER_CLI_BUILD=0
+# Keep Buildx enabled, but isolate its client state from the host-level
+# /root/.docker/buildx/activity path, which is unreliable on this VPS.
+# The release is immutable, so this temporary config is safe to discard after deploy.
+DOCKER_CONFIG="/tmp/fox-staging-docker-config-${EXPECTED_COMMIT}"
+rm -rf -- "$DOCKER_CONFIG"
+/usr/bin/install -d -o root -g root -m 0700 "$DOCKER_CONFIG"
+export DOCKER_CONFIG
+cleanup_docker_config() { /bin/rm -rf -- "$DOCKER_CONFIG"; }
+trap cleanup_docker_config EXIT
 
 printf '\n=== 6. BUILD UPDATED STAGING IMAGE FROM SHARED SOURCE ===\n'
 
