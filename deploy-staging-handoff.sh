@@ -607,7 +607,7 @@ PY
 # Keep Buildx enabled, but isolate its client state from the host-level
 # /root/.docker/buildx/activity path, which is unreliable on this VPS.
 # The release is immutable, so this temporary config is safe to discard after deploy.
-DOCKER_CONFIG="/tmp/fox-staging-docker-config-${EXPECTED_COMMIT}"
+DOCKER_CONFIG="/tmp/fox-staging-docker-config-${FOX_STAGING_EXPECTED_COMMIT}"
 rm -rf -- "$DOCKER_CONFIG"
 /usr/bin/install -d -o root -g root -m 0700 "$DOCKER_CONFIG"
 export DOCKER_CONFIG
