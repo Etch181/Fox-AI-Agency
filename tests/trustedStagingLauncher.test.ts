@@ -60,7 +60,7 @@ test("external trusted launcher acquires only the pinned remote tree and snapsho
   assert.match(launcher, /env -i/);
   assert.doesNotMatch(launcher, /name: fox-ai-agency-staging/);
   assert.doesNotMatch(launcher, /compose project mismatch/);
-  assert.match(handoff, /COMPOSE_PROJECT="fox-ai-staging"/);
+  assert.match(handoff, /COMPOSE_PROJECT="fox-ai-agency"/);
   assert.match(handoff, /-p "\$COMPOSE_PROJECT"/);
   assert.match(handoff, /config\.get\("name"\) != expected_project/);
   assert.match(launcher, /staging\.foxaiagency\.online/);
