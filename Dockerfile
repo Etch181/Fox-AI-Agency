@@ -70,14 +70,11 @@ RUN apk add --no-cache ca-certificates && \
 WORKDIR /app
 
 # Copy production dependencies from builder
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/node_modules/.package-lock.json ./node_modules/.package-lock.json
+COPY --chown=foxapp:foxapp --from=builder /app/node_modules ./node_modules
+COPY --chown=foxapp:foxapp --from=builder /app/node_modules/.package-lock.json ./node_modules/.package-lock.json
 
 # Copy built artifacts only (esbuild bundles server.ts + all imports into dist/server.cjs)
-COPY --from=builder /app/dist ./dist
-
-# Set ownership to non-root user
-RUN chown -R foxapp:foxapp /app
+COPY --chown=foxapp:foxapp --from=builder /app/dist ./dist
 
 # Switch to non-root user
 USER foxapp

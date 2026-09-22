@@ -3459,11 +3459,19 @@ ${industryContext || "Standard business inquiry catalog."}
     // Deterministic high-risk intents take precedence over
     // generic keyword/booking detection.
     // =========================================================
-    const brainIntent = await this.classifyIntent(
-      workspace,
-      message,
-      []
-    );
+    const brainIntent =
+      channel === "agency_marketing"
+        ? {
+            intent: "marketing",
+            selectedAgent: "marketing",
+            confidence: 1,
+            handoffRequired: false,
+          }
+        : await this.classifyIntent(
+            workspace,
+            message,
+            []
+          );
 
     const brainRole: "Sales" | "Support" | "Marketing" =
       brainIntent.intent === "marketing"
@@ -3507,7 +3515,8 @@ ${industryContext || "Standard business inquiry catalog."}
         normalizedHandoffMessage
       );
 
-    if (workspace?.aiSettings?.autoComplaintEscalation !== false &&
+    if (channel !== "agency_marketing" &&
+        workspace?.aiSettings?.autoComplaintEscalation !== false &&
         (defaultHandoffPattern.test(normalizedHandoffMessage) || customHandoffMatch || severeEscalation)) {
       const handoffReply =
         messageLang === "ar"
